@@ -95,15 +95,15 @@ public class ClearTests
     [TestMethod]
     public void ClearWhileAddingValues()
     {
-        // Run multiple times as timing is non-deterministic (it fails on 1 run about 1/3 of the time, so run 100 times to be certain)
-        for (int i = 0; i < 100; i++)
+        // Run multiple times as timing is non-deterministic (it fails on 1 run about 1/3 of the time on a high core computer, so run 1000 times to be certain)
+        for (int i = 0; i < 1000; i++)
         {
             var list = new ConcurrentWeakList<object>();
-            var initialValues = Enumerable.Range(0, 200).Select((_) => new object()).ToList();
+            var initialValues = Enumerable.Range(0, 2000).Select((_) => new object()).ToList();
             foreach (object v in initialValues)
                 list.AddLast(v);
 
-            var newValues = Enumerable.Range(0, 200).Select((_) => new object()).ToList();
+            var newValues = Enumerable.Range(0, 2000).Select((_) => new object()).ToList();
             var addedNodes = new List<ConcurrentWeakList<object>.Node>();
 
             // Start adding values in a separate thread
@@ -134,8 +134,11 @@ public class ClearTests
             if (success) return;
         }
 
-        // If we get here, no added nodes survived the Clear in any of the attempts
 #pragma warning disable RS0030 // Do not use banned APIs
+        // If we have less than 4 cores, return an inconclusive result instead:
+        if (Environment.ProcessorCount < 4) Assert.Inconclusive("Not enough cores for ClearWhileAddingValues to be reliable.");
+
+        // If we get here, no added nodes survived the Clear in any of the attempts
         Assert.Fail("No added nodes survived the Clear in any of the attempts.");
 #pragma warning restore RS0030 // Do not use banned APIs
     }

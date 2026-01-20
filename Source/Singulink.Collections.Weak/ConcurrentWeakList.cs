@@ -408,7 +408,14 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         /// <summary>
         /// Gets the list that this node belongs to, or used to belong to.
         /// </summary>
-        public ConcurrentWeakList<T> List => _list;
+        public ConcurrentWeakList<T> List
+        {
+            get
+            {
+                GC.KeepAlive(_list);
+                return _list;
+            }
+        }
 
         /// <summary>
         /// Gets the target value of this node if it is still available, otherwise <see langword="null" />.
@@ -451,6 +458,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
             // This implementation here doesn't need to be thread-safe, as the actual Dispose itself is thread-safe and supports multiple calls.
             if (GetInternalNode() is { } node) node.Dispose(this);
             _node = null;
+            GC.KeepAlive(_list);
         }
 
 #if !NETSTANDARD
@@ -500,7 +508,9 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
                 // Note: when the lock is held, it is enough to just check the color, but otherwise checking IsRemoved is more up-to-date.
                 if (GetInternalNode() is not { } node) return true;
                 Thread.MemoryBarrier(); // Ensure we get the latest value.
-                return Volatile.Read(ref node._finalizeAttemptCount) == -1;
+                bool result = Volatile.Read(ref node._finalizeAttemptCount) == -1;
+                GC.KeepAlive(_list);
+                return result;
             }
         }
     }
@@ -1693,6 +1703,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
             {
                 var currentNode = _currentNode;
                 if (currentNode is null) ThrowInvalidOperationExceptionForEnumeration();
+                GC.KeepAlive(_list);
                 return currentNode;
             }
         }
@@ -1793,6 +1804,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         public readonly IEnumerable<Node> AsEnumerable(bool reversed = false, bool skipNewNodes = false)
         {
             if (_list is null) ThrowDisposed("NodeEnumerator");
+            GC.KeepAlive(_list);
             return new HeapNodeEnumerable(this, reversed, skipNewNodes);
         }
     }
@@ -1904,6 +1916,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         public readonly IEnumerable<T> AsEnumerable(bool reversed = false, bool skipNewNodes = false)
         {
             if (_nodeEnumerator._list is null) ThrowDisposed("ValueEnumerator");
+            GC.KeepAlive(_nodeEnumerator._list);
             return new HeapValueEnumerable(this, reversed, skipNewNodes);
         }
     }
@@ -2105,6 +2118,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
             Thread.MemoryBarrier();
             nint size = Volatile.Read(ref _size);
             if (_root == null) ThrowDisposed();
+            GC.KeepAlive(this);
             return size;
         }
     }
@@ -2117,6 +2131,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     {
         CheckNode(node);
         node.Dispose();
+        GC.KeepAlive(this);
     }
 
     /// <summary>
@@ -2289,6 +2304,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
             Thread.MemoryBarrier();
             ulong version = Volatile.Read(ref _version);
             if (_root == null) ThrowDisposed();
+            GC.KeepAlive(this);
             return new ListVersion(version);
         }
     }

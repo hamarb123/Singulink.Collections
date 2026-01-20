@@ -21,6 +21,7 @@ public class LifetimeTests
         node.Value.ShouldBeSameAs(value);
 
         GC.KeepAlive(value);
+        GC.KeepAlive(list);
     }
 
     [TestMethod]
@@ -42,6 +43,8 @@ public class LifetimeTests
         valueRef.TryGetTarget(out _).ShouldBeFalse();
         node.IsRemoved.ShouldBeTrue();
         internalNodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
+
+        GC.KeepAlive(list);
     }
 
     [TestMethod]
@@ -65,6 +68,7 @@ public class LifetimeTests
         internalNodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
 
         GC.KeepAlive(node);
+        GC.KeepAlive(list);
     }
 
     [TestMethod]
@@ -108,6 +112,7 @@ public class LifetimeTests
         listWeakRef.TryGetTarget(out _).ShouldBeFalse();
         nodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
         internalNodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
+
         GC.KeepAlive(o);
     }
 
@@ -130,6 +135,7 @@ public class LifetimeTests
         listWeakRef.TryGetTarget(out _).ShouldBeFalse();
         nodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
         internalNodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
+
         GC.KeepAlive(o);
     }
 
@@ -152,6 +158,7 @@ public class LifetimeTests
         listWeakRef.TryGetTarget(out _).ShouldBeFalse();
         nodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
         internalNodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
+
         GC.KeepAlive(o);
     }
 
@@ -173,6 +180,7 @@ public class LifetimeTests
         actualNode.IsRemoved.ShouldBeFalse();
 
         GC.KeepAlive(value);
+        GC.KeepAlive(list);
     }
 
     [TestMethod]
@@ -191,6 +199,8 @@ public class LifetimeTests
         Helpers.ForceGC();
 
         nodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
+
+        GC.KeepAlive(list);
     }
 
     [TestMethod]
@@ -209,6 +219,8 @@ public class LifetimeTests
         Helpers.ForceGC();
 
         nodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
+
+        GC.KeepAlive(list);
     }
 
     [TestMethod]
@@ -258,5 +270,6 @@ public class LifetimeTests
         actualNode.IsRemoved.ShouldBeFalse();
 
         GC.KeepAlive(value);
+        GC.KeepAlive(list);
     }
 }
