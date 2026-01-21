@@ -1,0 +1,11 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net6.0</TargetFrameworks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Source\Singulink.Collections.Weak\Singulink.Collections.Weak.csproj" SetTargetFramework="TargetFramework=netstandard2.1" />
+  </ItemGroup>
+
+</Project>

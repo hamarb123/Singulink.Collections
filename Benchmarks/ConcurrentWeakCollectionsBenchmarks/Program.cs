@@ -1,19 +1,87 @@
 ﻿using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Columns;
+using BenchmarkDotNet.Configs;
+using BenchmarkDotNet.Environments;
 using BenchmarkDotNet.Jobs;
+using BenchmarkDotNet.Order;
+using BenchmarkDotNet.Reports;
 using BenchmarkDotNet.Running;
 using Singulink.Collections;
 
-// NOTE: this should be run with the .NET 10.0 tfm.
+BenchmarkRunner.Run<Benchs>(args: args);
 
-BenchmarkRunner.Run<Benchs>();
+/*
+    Note: the setup here is somewhat finicky to get the .NET Standard versions being used.
+    When making changes to the config, add the following code (adjusted as required) to the start of ManualAdd and run just 1 benchmark at 1 size
+        (e.g., AddRemoveNodeAtStart with N=1) with Job.ShortRun instead of Job.Default:
+
+#pragma warning disable SA1134
+#if NET10_0
+        _ = ((Func<object>)([MethodImpl(MethodImplOptions.NoInlining)] () => new long[1000]))();
+#elif NET9_0
+        _ = ((Func<object>)([MethodImpl(MethodImplOptions.NoInlining)] () => new long[2000]))();
+#elif NETSTANDARD2_1_OR_GREATER
+        _ = ((Func<object>)([MethodImpl(MethodImplOptions.NoInlining)] () => new long[3000]))();
+#elif NETSTANDARD
+        _ = ((Func<object>)([MethodImpl(MethodImplOptions.NoInlining)] () => new long[4000]))();
+#endif
+
+    This allows validating that it is indeed running with the correct build of the library, as the allocated memory is substantially larger than what would
+    occur naturally & differs between the target frameworks.
+*/
+
+public class MyConfig : ManualConfig
+{
+    public MyConfig()
+    {
+        AddJob(Job.Default
+            .WithRuntime(CoreRuntime.Core10_0)
+            .WithId(".NET 10.0")
+            .AsBaseline());
+
+        AddJob(Job.Default
+            .WithRuntime(CoreRuntime.Core90)
+            .WithId(".NET 9.0"));
+
+        AddJob(Job.Default
+            .WithRuntime(CoreRuntime.Core80)
+            .WithId(".NET 8.0 (.NET Standard 2.1)"));
+
+        AddJob(Job.Default
+            .WithRuntime(CoreRuntime.Core60)
+            .WithId(".NET 6.0 (.NET Standard 2.0)"));
+
+        WithOrderer(new JobOrderer(".NET 10.0", ".NET 9.0", ".NET 8.0 (.NET Standard 2.1)", ".NET 6.0 (.NET Standard 2.0)"));
+
+        WithOption(ConfigOptions.DisableParallelBuild, true);
+
+        HideColumns(Column.Runtime);
+    }
+}
+
+public class JobOrderer : DefaultOrderer
+{
+    private readonly string[] _order;
+
+    public JobOrderer(params string[] order)
+    {
+        _order = order;
+    }
+
+    protected override IEnumerable<BenchmarkCase> GetSummaryOrderForGroup(System.Collections.Immutable.ImmutableArray<BenchmarkCase> benchmarksCase, Summary summary)
+    {
+        return benchmarksCase.OrderBy((x) =>
+        {
+            int index = Array.IndexOf(_order, x.Job.Id);
+            return index < 0 ? int.MaxValue : index;
+        });
+    }
+}
 
 [MemoryDiagnoser]
-[SimpleJob(RuntimeMoniker.HostProcess, id: ".NET 10.0", baseline: true)]
-[SimpleJob(RuntimeMoniker.Net90, id: ".NET 9.0")]
-[SimpleJob(RuntimeMoniker.Net80, id: ".NET 8.0 (.NET Standard 2.1)")]
-[SimpleJob(RuntimeMoniker.Net60, id: ".NET 6.0 (.NET Standard 2.0)")]
+[Config(typeof(MyConfig))]
 public class Benchs
 {
     [Params(0, 1, 3, 10, 30, 100, 300, 1000, 3000, 10000)]
