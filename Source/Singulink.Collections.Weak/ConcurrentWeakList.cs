@@ -1673,7 +1673,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     }
 
     /// <summary>
-    /// Adds a value before specified node of the list - takes O(log n) time.
+    /// Adds a value before the specified node of the list - takes O(log n) time.
     /// </summary>
     /// <remarks>
     /// <para>The <see cref="AddBefore(Node, T)" /> override behaves as if <paramref name="allowBeforeRemovedNode"/> is <see langword="true" />.</para>
@@ -1694,7 +1694,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     }
 
     /// <summary>
-    /// Adds a value after specified node of the list - takes O(log n) time.
+    /// Adds a value after the specified node of the list - takes O(log n) time.
     /// </summary>
     /// <remarks>
     /// <para>The <see cref="AddAfter(Node, T)" /> override behaves as if <paramref name="allowAfterRemovedNode"/> is <see langword="true" />.</para>
@@ -1748,7 +1748,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     }
 
     /// <summary>
-    /// Tries to add a value before specified value of the list, or returns <see langword="null" /> - this method has the same runtime as
+    /// Tries to add a value before the specified value of the list, or returns <see langword="null" /> - this method has the same runtime as
     /// <see cref="GetEnumerator()" /> plus O(n * comparer.Equals).
     /// </summary>
     /// <exception cref="ArgumentNullException">If the value is null.</exception>
@@ -1756,7 +1756,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     public Node? TryInsertBefore(T existingValue, T value, IEqualityComparer<T>? comparer = null) => TryInsertNear(existingValue, value, comparer, addBefore: true);
 
     /// <summary>
-    /// Tries to add a value before specified value of the list, or returns <see langword="null" /> - this method has the same runtime as
+    /// Tries to add a value after the specified value of the list, or returns <see langword="null" /> - this method has the same runtime as
     /// <see cref="GetEnumerator()" /> plus O(n * comparer.Equals).
     /// </summary>
     /// <exception cref="ArgumentNullException">If the value is null.</exception>
@@ -1764,7 +1764,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     public Node? TryInsertAfter(T existingValue, T value, IEqualityComparer<T>? comparer = null) => TryInsertNear(existingValue, value, comparer, addBefore: false);
 
     /// <summary>
-    /// Tries to add a value before specified value of the list, or throws - this method has the same runtime as
+    /// Tries to add a value before the specified value of the list, or throws - this method has the same runtime as
     /// <see cref="GetEnumerator()" /> plus O(n * comparer.Equals).
     /// </summary>
     /// <exception cref="ArgumentNullException">If the value is null.</exception>
@@ -1778,7 +1778,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     }
 
     /// <summary>
-    /// Tries to add a value before specified value of the list, or throws - this method has the same runtime as
+    /// Tries to add a value after the specified value of the list, or throws - this method has the same runtime as
     /// <see cref="GetEnumerator()" /> plus O(n * comparer.Equals).
     /// </summary>
     /// <exception cref="ArgumentNullException">If the value is null.</exception>
@@ -1891,7 +1891,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
 
             // Get the previous node (unless it has been removed):
             Node? newNode = _currentNode;
-            bool isRemovedNode = true;
+            bool isRemovedNode;
             using (_list.EnterLock(out bool wasDisposed))
             {
                 if (wasDisposed) goto disposed;
@@ -2427,7 +2427,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     }
 
     /// <summary>
-    /// Determins if the list contains any node that is considered equal according to the comparer - this method has the same runtime as
+    /// Determines if the list contains any node that is considered equal according to the comparer - this method has the same runtime as
     /// <see cref="GetEnumerator()" /> plus O(n * comparer.Equals).
     /// </summary>
     /// <remarks>
