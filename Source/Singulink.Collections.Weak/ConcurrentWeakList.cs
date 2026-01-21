@@ -501,7 +501,6 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         {
             // Note: nothing in theory prevents us from implementing this on .NET Standard, but it would be more complex (due to having to update the CWT), so
             // we just don't support it there for now.
-            ArgumentNullException.ThrowIfNull(newTarget); // RuntimeNullables seems to miss this somehow, so just add manually for now.
             if (GetInternalNode() is not { } node) return false;
             using var scope = _list.EnterLock(out bool wasDisposed);
             if (wasDisposed) return false;
