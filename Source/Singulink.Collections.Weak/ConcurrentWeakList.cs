@@ -64,6 +64,19 @@ file static class Helpers
             "The specified value was not found in the list.", paramName);
     }
 
+#if NET
+    [StackTraceHidden]
+#endif
+    [DoesNotReturn]
+    public static void ThrowUnreachableExceptionForOverIterated()
+    {
+#if NET8_0_OR_GREATER
+        throw new UnreachableException("The data structure has reached a corrupted state that would cause a deadlock, so the operation was aborted.");
+#else
+        throw new InvalidOperationException("The data structure has reached a corrupted state that would cause a deadlock, so the operation was aborted.");
+#endif
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static T? TryGetValue<T>(WeakReference<T>? wr) where T : class
     {
@@ -580,6 +593,13 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         return node;
     }
 
+    // Helper to detect corruption in Release mode that would cause the lock to be held forever, leading to an app-wide deadlock:
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void CheckIterationCount(ref int iterationCount)
+    {
+        if (++iterationCount > 512) ThrowUnreachableExceptionForOverIterated();
+    }
+
     // Adds to binary search tree at the given index, ignoring red-black tree rules - inserts as a red node.
     // This has the same restrictions as AllocNode, since it is not set up in a valid way for red-black trees.
     // Assumes that the caller validated the index.
@@ -598,7 +618,13 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         if (index == _size)
         {
             // Optimize for appending to end (common case) - go to rightmost node and insert as its right child:
-            while (parent is { _right: not null }) parent = parent._right;
+            int iterationCount = 0;
+            while (parent is { _right: not null })
+            {
+                CheckIterationCount(ref iterationCount);
+                parent = parent._right;
+            }
+
             becomeLeftChild = false;
         }
         else
@@ -607,8 +633,10 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
             nint childrenOrderedBeforeParent = (parent._left?._subtreeSize ?? 0) + 1;
             becomeLeftChild = implIndex < childrenOrderedBeforeParent;
             Node nextParent;
+            int iterationCount = 0;
             while ((nextParent = becomeLeftChild ? parent._left : parent._right) != null)
             {
+                CheckIterationCount(ref iterationCount);
                 parent = nextParent;
                 if (becomeLeftChild)
                 {
@@ -649,8 +677,10 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
 
         // Update subtree sizes up the tree (custom step - takes O(log n) time):
         node._subtreeSize = 1;
+        int iterationCount = 0;
         do
         {
+            CheckIterationCount(ref iterationCount);
             parent._subtreeSize++;
             parent = parent._parent;
         }
@@ -786,9 +816,11 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         DebugAssertNotDisposed();
 
         // Loop while the node's parent is not black & node is not the root:
+        int iterationCount = 0;
         while (n is { _parent._color: Node.Color.Red })
         {
             // Get the uncle node:
+            CheckIterationCount(ref iterationCount);
             var parent = n._parent;
             var grandparent = parent._parent;
             Debug.Assert(grandparent is { }, "Grandparent should not be null if parent is red.");
@@ -873,11 +905,12 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
 #endif
 
         // Forget all nodes:
-        ForgetNodeTree(oldRoot);
-        void ForgetNodeTree(Node n)
+        ForgetNodeTree(oldRoot, 0);
+        void ForgetNodeTree(Node n, int depth)
         {
-            if (n._left is not null) ForgetNodeTree(n._left);
-            if (n._right is not null) ForgetNodeTree(n._right);
+            if (depth > 512) ThrowUnreachableExceptionForOverIterated();
+            if (n._left is not null) ForgetNodeTree(n._left, depth + 1);
+            if (n._right is not null) ForgetNodeTree(n._right, depth + 1);
             n._color = Node.Color.Removed;
             n._left = null;
             n._right = null;
@@ -907,23 +940,24 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         using var scope = EnterLock(out bool wasDisposed);
         if (wasDisposed) return;
         DebugAssertNotDisposed();
-        HandleNode(_root);
+        HandleNode(_root, 0);
         _root = null;
 
         // We loop through the whole list at once & free the DependentHandles rather than doing it part-by-part - this can block the finalizer thread for a
         // significant amount of time if the list is large.
         // If this causes issues for the caller, they should have properly disposed the list instead of letting the finalizer run.
-        void HandleNode(Node n)
+        void HandleNode(Node n, int depth)
         {
             // Check if is removed node:
+            if (depth > 512) ThrowUnreachableExceptionForOverIterated();
             if (n._color == Node.Color.Removed) return;
 
             // Handle internal node disposal:
             if (n.GetInternalNode() is { } node) node.EarlyDispose();
 
             // Recurse:
-            if (n._left is not null) HandleNode(n._left);
-            if (n._right is not null) HandleNode(n._right);
+            if (n._left is not null) HandleNode(n._left, depth + 1);
+            if (n._right is not null) HandleNode(n._right, depth + 1);
 
             // Clear references:
             n._color = Node.Color.Removed;
@@ -1068,7 +1102,13 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         if (implIndex == parent._subtreeSize - 1)
         {
             // Optimize for getting last node - go to rightmost node and return it:
-            while (parent is { _right: not null }) parent = parent._right;
+            int iterationCount = 0;
+            while (parent is { _right: not null })
+            {
+                CheckIterationCount(ref iterationCount);
+                parent = parent._right;
+            }
+
             return parent;
         }
         else
@@ -1077,9 +1117,11 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
             nint childrenOrderedBeforeParent = (parent._left?._subtreeSize ?? 0) + 1;
             bool becomeLeftChild = implIndex < childrenOrderedBeforeParent;
             Node nextParent;
+            int iterationCount = 0;
             while ((nextParent = becomeLeftChild ? parent._left : parent._right) != null)
             {
                 // Check if we found the node:
+                CheckIterationCount(ref iterationCount);
                 if (implIndex == childrenOrderedBeforeParent - 1) return parent;
 
                 // Move down the tree:
@@ -1122,16 +1164,23 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         }
 
         // If we have a right child, go down that:
+        int iterationCount = 0;
         if (n._right is not null)
         {
             n = n._right;
-            while (n._left is not null) n = n._left;
+            while (n._left is not null)
+            {
+                CheckIterationCount(ref iterationCount);
+                n = n._left;
+            }
+
             return n;
         }
 
         // Otherwise, go up until we find a parent that we are a left child of:
         while (n is not null && (n._parent is null || IsRightChild(n)))
         {
+            CheckIterationCount(ref iterationCount);
             n = n._parent;
         }
 
@@ -1156,10 +1205,16 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         }
 
         // If we have a left child, go down that:
+        int iterationCount = 0;
         if (n._left is not null)
         {
             n = n._left;
-            while (n._right is not null) n = n._right;
+            while (n._right is not null)
+            {
+                CheckIterationCount(ref iterationCount);
+                n = n._right;
+            }
+
             if (n._isPseudoNode) return null;
             return n;
         }
@@ -1167,6 +1222,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         // Otherwise, go up until we find a parent that we are a right child of:
         while (n is not null && !IsRightChild(n))
         {
+            CheckIterationCount(ref iterationCount);
             n = n._parent;
         }
 
@@ -1268,8 +1324,10 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
 
         // Update subtree sizes up the tree (custom step - takes O(log n) time):
         var parent = n._parent;
+        int iterationCount = 0;
         while (parent is not null)
         {
+            CheckIterationCount(ref iterationCount);
             parent._subtreeSize--;
             parent = parent._parent;
         }
@@ -1292,9 +1350,11 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     private void FixDelete(Node n)
     {
         // Loop until either the root is double black (which we can just recolor to black), or until we recolor to single black:
+        int iterationCount = 0;
         while (n is { _color: Node.Color.Black, _parent: not null })
         {
             // Get sibling node:
+            CheckIterationCount(ref iterationCount);
             var parent = n._parent;
             bool isRightChild = IsRightChild(n);
             var sibling = isRightChild ? parent._left : parent._right;
@@ -1656,13 +1716,25 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
                 if (addBefore && currentNode._left is not null)
                 {
                     currentNode = currentNode._left;
-                    while (currentNode._right is not null) currentNode = currentNode._right;
+                    int iterationCount = 0;
+                    while (currentNode._right is not null)
+                    {
+                        CheckIterationCount(ref iterationCount);
+                        currentNode = currentNode._right;
+                    }
+
                     addBefore = false;
                 }
                 else if (!addBefore && currentNode._right is not null)
                 {
                     currentNode = currentNode._right;
-                    while (currentNode._left is not null) currentNode = currentNode._left;
+                    int iterationCount = 0;
+                    while (currentNode._left is not null)
+                    {
+                        CheckIterationCount(ref iterationCount);
+                        currentNode = currentNode._left;
+                    }
+
                     addBefore = true;
                 }
 
@@ -2460,9 +2532,11 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         // Calculate 1-based rank (position in in-order traversal including pseudo-node):
         Node originalNode = node;
         nint rank = (node._left?._subtreeSize ?? 0) + 1;
+        int iterationCount = 0;
         while (node._parent is not null)
         {
             // If we came from the right subtree, add parent's left subtree size + 1 (for the parent itself)
+            CheckIterationCount(ref iterationCount);
             if (IsRightChild(node)) rank += (node._parent._left?._subtreeSize ?? 0) + 1;
             node = node._parent;
         }
