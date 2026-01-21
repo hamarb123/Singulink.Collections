@@ -18,7 +18,7 @@ internal struct WeakHandle(IntPtr handle)
 #else
     private readonly GCHandle AsGCHandle()
     {
-        var handle = Handle;
+        IntPtr handle = Handle;
         if (handle == IntPtr.Zero) return default;
         return GCHandle.FromIntPtr(handle);
     }
@@ -84,7 +84,7 @@ internal struct WeakHandle(IntPtr handle)
             var shared = _sharedCache;
 #if NET7_0_OR_GREATER
             ReadOnlySpan<IntPtr> values = MemoryMarshal.CreateReadOnlySpan(ref shared.Handle0, SharedWeakHandleHolder.NumHandles);
-            var potentialIndex = values.IndexOfAnyExcept(IntPtr.Zero);
+            int potentialIndex = values.IndexOfAnyExcept(IntPtr.Zero);
             if (potentialIndex >= 0)
             {
                 Debug.Assert(potentialIndex < SharedWeakHandleHolder.NumHandles, "Index should be in range.");
@@ -145,7 +145,7 @@ internal struct WeakHandle(IntPtr handle)
             [MethodImpl(MethodImplOptions.NoInlining)]
             static void Fallback(WeakHandle handle)
             {
-                var handleValue = handle.Handle;
+                IntPtr handleValue = handle.Handle;
                 var shared = _sharedCache;
 #if NET
                 Span<IntPtr> values = MemoryMarshal.CreateSpan(ref shared.Handle0, SharedWeakHandleHolder.NumHandles);
@@ -161,7 +161,7 @@ internal struct WeakHandle(IntPtr handle)
                 {
                     ref IntPtr handleRef = ref Unsafe.Add(ref shared.Handle0, i);
 #endif
-                    var oldValue = Interlocked.CompareExchange(ref handleRef, handleValue, IntPtr.Zero);
+                    IntPtr oldValue = Interlocked.CompareExchange(ref handleRef, handleValue, IntPtr.Zero);
                     if (oldValue == IntPtr.Zero)
                     {
                         GC.KeepAlive(shared);
@@ -196,7 +196,7 @@ internal struct WeakHandle(IntPtr handle)
         {
             for (int i = 0; i < Count; i++)
             {
-                var handleValue = Unsafe.Add(ref Handle0, i);
+                IntPtr handleValue = Unsafe.Add(ref Handle0, i);
                 var handle = new WeakHandle(handleValue);
                 handle.DisposeReal();
             }
@@ -214,7 +214,7 @@ internal struct WeakHandle(IntPtr handle)
         {
             for (int i = 0; i < NumHandles; i++)
             {
-                var handleValue = Unsafe.Add(ref Handle0, i);
+                IntPtr handleValue = Unsafe.Add(ref Handle0, i);
                 if (handleValue != IntPtr.Zero)
                 {
                     var handle = new WeakHandle(handleValue);

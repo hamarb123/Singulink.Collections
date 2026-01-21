@@ -17,20 +17,6 @@ namespace Singulink.Collections;
 using static Singulink.Collections.Helpers;
 file static class Helpers
 {
-    public static void ThrowIfNull<TValue>([NotNull] TValue? value, [CallerArgumentExpression("value")] string argumentName = "") where TValue : class?
-    {
-#if NET
-        ArgumentNullException.ThrowIfNull(value, argumentName);
-#else
-        if (value is null)
-        {
-            [DoesNotReturn]
-            static void Throw(string argumentName) => throw new ArgumentNullException(argumentName);
-            Throw(argumentName);
-        }
-#endif
-    }
-
 #if NET
     [StackTraceHidden]
 #endif
@@ -67,6 +53,24 @@ file static class Helpers
         throw new InvalidOperationException(
             "Enumeration has not started or has already finished; please call MoveNext or MovePrevious to begin a new enumeration.");
     }
+
+#if NET
+    [StackTraceHidden]
+#endif
+    [DoesNotReturn]
+    public static void ThrowArgumentExceptionForValueNotFound(string paramName)
+    {
+        throw new ArgumentException(
+            "The specified value was not found in the list.", paramName);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static T? TryGetValue<T>(WeakReference<T>? wr) where T : class
+    {
+        if (wr is null) return null;
+        if (!wr.TryGetTarget(out var result)) return null;
+        return result;
+    }
 }
 
 /// <summary>
@@ -82,7 +86,7 @@ file static class Helpers
 /// such environments.</para>
 /// <para>Note: all provided big O runtimes are strict, but those above O(log n) assume the case where no new nodes were added by another thread during the
 /// operation - if new nodes were added concurrently, it may cause the operation to take longer than expected (e.g., if a concurrent operation happens to
-/// always add a new node just after the an enumeration's current node, then it will have to loop through all of those until it gets past them).</para>
+/// always add a new node just after an enumeration's current node, then it will have to loop through all of those until it gets past them).</para>
 /// <para>For optimal performance, avoid letting the finalizer run; instead, dispose the list explicitly or clear it - otherwise, the finalizer thread may be
 /// blocked for a significant amount of time if the list is large.</para>
 /// </remarks>
@@ -135,6 +139,30 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     // It can be safely read with or without the lock held, but updates must be done with the lock held, and holding the lock is necessary to get an up-to-date
     // value.
     private nint _size;
+
+    // Helper to assert not disposed in Debug mode (doesn't check in Release mode, but still gives nullable analysis info):
+    [MemberNotNull(nameof(_root))]
+#if NETSTANDARD
+    [MemberNotNull(nameof(_cwt))]
+#if !NETSTANDARD2_1_OR_GREATER
+    [MemberNotNull(nameof(_cwtWeakRef))]
+    [MemberNotNull(nameof(_cwtKeys))]
+#endif
+#endif
+    partial void DebugAssertNotDisposed();
+#if DEBUG
+    partial void DebugAssertNotDisposed()
+    {
+        Debug.Assert(_root is not null, "Object is disposed.");
+#if NETSTANDARD
+        Debug.Assert(_cwt is not null, "_cwt should not be null since not disposed.");
+#if !NETSTANDARD2_1_OR_GREATER
+        Debug.Assert(_cwtWeakRef is not null, "_cwtWeakRef should not be null since not disposed.");
+        Debug.Assert(_cwtKeys is not null, "_cwtKeys should not be null since not disposed.");
+#endif
+#endif
+    }
+#endif
 
 #if NET9_0_OR_GREATER
     private readonly Lock _locker = new();
@@ -236,7 +264,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
                         // might not be able to look up these lists):
                         _cwtNode?.List?.Remove(_cwtNode);
 #if !NETSTANDARD2_1_OR_GREATER
-                        if (_cwtEntry?.TryGetTarget(out var cwtEntry) == true && cwtEntry!.Entries.Count == 0)
+                        if (Helpers.TryGetValue(_cwtEntry) is { } cwtEntry && cwtEntry.Entries.Count == 0)
                         {
                             if (_cwt.TryGetTarget(out var cwt) && cwtEntry.Key.TryGetTarget(out var key)) cwt.Remove(key);
                             cwtEntry.KeyNode?.List?.Remove(cwtEntry.KeyNode);
@@ -473,7 +501,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         {
             // Note: nothing in theory prevents us from implementing this on .NET Standard, but it would be more complex (due to having to update the CWT), so
             // we just don't support it there for now.
-            ArgumentNullException.ThrowIfNull(newTarget);
+            ArgumentNullException.ThrowIfNull(newTarget); // RuntimeNullables seems to miss this somehow, so just add manually for now.
             if (GetInternalNode() is not { } node) return false;
             using var scope = _list.EnterLock(out bool wasDisposed);
             if (wasDisposed) return false;
@@ -525,8 +553,9 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     // Note: callers must GC.KeepAlive the value until after it is fully linked in.
     // Note: callers must hold the lock for the list when calling this and have already checked for disposal.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private (Node Node, InternalNode InternalNode) AllocNode(T value)
+    private Node AllocNode(T value)
     {
+        DebugAssertNotDisposed();
         Node node = new(this);
         InternalNode internalNode = new();
         node._node = new WeakReference<InternalNode>(internalNode);
@@ -534,7 +563,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
 #if NETSTANDARD
         internalNode._value = WeakHandle.Alloc(value);
 #if NETSTANDARD2_1_OR_GREATER
-        internalNode._cwtNode = _cwt!.GetValue(value, static (_) => []).AddLast(internalNode);
+        internalNode._cwtNode = _cwt.GetValue(value, static (_) => []).AddLast(internalNode);
 #else
         var cwtEntry = _cwt.GetValue(value, _createValueCallback);
         internalNode._cwtEntry = new WeakReference<CwtEntry>(cwtEntry);
@@ -549,7 +578,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         _version++;
         Debug.Assert(_version > 0, "Version overflowed.");
         node._version = _version;
-        return (node, internalNode);
+        return node;
     }
 
     // Adds to binary search tree at the given index, ignoring red-black tree rules - inserts as a red node.
@@ -558,11 +587,14 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     // Note: index is the caller index (0-based for real items); internally we offset by 1 to account for the pseudo-node.
     private Node BSTAdd(T value, nint index)
     {
+        // Assert not disposed:
+        DebugAssertNotDisposed();
+
         // Offset by 1 to account for the pseudo-node:
         nint implIndex = index + 1;
 
         // Find the node to place it under:
-        Node parent = _root!;
+        Node parent = _root;
         bool becomeLeftChild;
         if (index == _size)
         {
@@ -611,7 +643,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
 
         // Set up the new node:
         Debug.Assert((becomeLeftChild ? parent._left : parent._right) == null, "Slot already occupied.");
-        var (node, internalNode) = AllocNode(value);
+        var node = AllocNode(value);
         (becomeLeftChild ? ref parent._left : ref parent._right) = node;
         node._parent = parent;
         node._color = Node.Color.Red;
@@ -636,7 +668,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     // The caller must hold the lock for the list when calling this and have already checked for disposal.
     // Note: the tree might not be valid for red-black rules after this is called, even if it was before.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private Node LeftRotate(Node n)
+    private void LeftRotate(Node n)
     {
         /*
         Change this:
@@ -659,7 +691,8 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
 
         // Get all the nodes/subtrees that we need:
         var x = n;
-        var y = x._right!;
+        var y = x._right;
+        Debug.Assert(y is { }, "Caller should ensure n._right is not null.");
         var b = y._left;
 
         // Update the parent to point to y instead of x:
@@ -688,14 +721,11 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         // Update x & y's subtree sizes:
         x._subtreeSize += (b?._subtreeSize ?? 0) - y._subtreeSize;
         y._subtreeSize += x._subtreeSize - (b?._subtreeSize ?? 0);
-
-        // Return the new root of the subtree:
-        return y;
     }
 
     // Same restrictions as LeftRotate.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private Node RightRotate(Node n)
+    private void RightRotate(Node n)
     {
         /*
         Change this:
@@ -718,7 +748,8 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
 
         // Get all the nodes/subtrees that we need:
         var x = n;
-        var y = x._left!;
+        var y = x._left;
+        Debug.Assert(y is { }, "Caller should ensure n._left is not null.");
         var b = y._right;
 
         // Update the parent to point to y instead of x:
@@ -747,20 +778,21 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         // Update x & y's subtree sizes:
         x._subtreeSize += (b?._subtreeSize ?? 0) - y._subtreeSize;
         y._subtreeSize += x._subtreeSize - (b?._subtreeSize ?? 0);
-
-        // Return the new root of the subtree:
-        return y;
     }
 
     // Same restrictions as AllocNode.
     private void FixInsert(Node n)
     {
+        // Assert not disposed:
+        DebugAssertNotDisposed();
+
         // Loop while the node's parent is not black & node is not the root:
         while (n is { _parent._color: Node.Color.Red })
         {
             // Get the uncle node:
             var parent = n._parent;
-            var grandparent = parent._parent!;
+            var grandparent = parent._parent;
+            Debug.Assert(grandparent is { }, "Grandparent should not be null if parent is red.");
             var uncle = IsRightChild(parent) ? grandparent._left : grandparent._right;
 
             // If uncle is red:
@@ -782,10 +814,8 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
                     if (nIsRightChild) LeftRotate(parent);
                     else RightRotate(parent);
 
-                    // Update nodes for next step:
-                    n = parent;
-                    parent = n._parent!;
-                    grandparent = parent._parent!;
+                    // Update nodes for next step (the rotate only results in these changes):
+                    (n, parent) = (parent, n);
                 }
 
                 // Handle line:
@@ -802,7 +832,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         }
 
         // Ensure root node is black:
-        _root!._color = Node.Color.Black;
+        _root._color = Node.Color.Black;
     }
 
     // Handle failure in a way that doesn't potentially cause further corruption or finalizers to throw, etc.
@@ -810,10 +840,13 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     // The caller must hold the lock for the list when calling this.
     private void HandleFailureOrDispose()
     {
+        // Assert not disposed yet:
+        DebugAssertNotDisposed();
+
         // Mark disposed:
         // Note: we want other threads to be able to see it as soon as (in program order) we release the lock, even if they don't take it; hence the memory
         // barrier.
-        var oldRoot = _root!;
+        var oldRoot = _root;
         _root = null;
         Thread.MemoryBarrier();
 
@@ -827,9 +860,9 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         // Clean out resources:
 #if NETSTANDARD
 #if NETSTANDARD2_1_OR_GREATER
-        _cwt!.Clear();
+        _cwt.Clear();
 #else
-        var cwtKeysCopy = _cwtKeys!;
+        var cwtKeysCopy = _cwtKeys;
         _cwtKeys = null;
         foreach (var keyRef in cwtKeysCopy)
         {
@@ -874,7 +907,8 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         // Take the lock:
         using var scope = EnterLock(out bool wasDisposed);
         if (wasDisposed) return;
-        HandleNode(_root!);
+        DebugAssertNotDisposed();
+        HandleNode(_root);
         _root = null;
 
         // We loop through the whole list at once & free the DependentHandles rather than doing it part-by-part - this can block the finalizer thread for a
@@ -1024,12 +1058,14 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     // Use index -1 to get the pseudo-node (internal index 0).
     private Node GetNodeAtImpl(nint index)
     {
+        // Assert not disposed yet & check index:
+        DebugAssertNotDisposed();
         Debug.Assert(index >= -1 && index < _size, "Index out of range.");
 
         // Offset by 1 to account for the pseudo-node:
         nint implIndex = index + 1;
 
-        Node parent = _root!;
+        Node parent = _root;
         if (implIndex == parent._subtreeSize - 1)
         {
             // Optimize for getting last node - go to rightmost node and return it:
@@ -1161,6 +1197,12 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
             bool isNRightChild = IsRightChild(n);
             bool isSuccessorRightChild = IsRightChild(successor);
             bool successorIsDirectChild = successor._parent == n;
+            n._subtreeSize = (successor._left?._subtreeSize ?? 0) + (successor._right?._subtreeSize ?? 0) + 1;
+            successor._subtreeSize = n._left._subtreeSize + n._right._subtreeSize + 1;
+            successor._left?._parent = n;
+            successor._right?._parent = n;
+            n._left._parent = successor;
+            n._right._parent = successor;
             (n._parent, successor._parent) = (successor._parent, n._parent);
             (n._left, successor._left) = (successor._left, n._left);
             (n._right, successor._right) = (successor._right, n._right);
@@ -1170,12 +1212,6 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
             else _root = n;
             if (successor._parent is not null) (isNRightChild ? ref successor._parent._right : ref successor._parent._left) = successor;
             else _root = successor;
-            n._left?._parent = n;
-            n._right?._parent = n;
-            successor._left?._parent = successor;
-            successor._right?._parent = successor;
-            n._subtreeSize = (n._left?._subtreeSize ?? 0) + (n._right?._subtreeSize ?? 0) + 1;
-            successor._subtreeSize = (successor._left?._subtreeSize ?? 0) + (successor._right?._subtreeSize ?? 0) + 1;
         }
 
         // Handle 1 child case, and determine if we have an extra black to fixup:
@@ -1263,9 +1299,10 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
             var parent = n._parent;
             bool isRightChild = IsRightChild(n);
             var sibling = isRightChild ? parent._left : parent._right;
+            Debug.Assert(sibling is { }, "Sibling should not be null during delete fixup.");
 
             // If sibling is red:
-            if (sibling!._color == Node.Color.Red)
+            if (sibling._color == Node.Color.Red)
             {
                 // Recolor sibling to black, parent to red, rotate parent in direction of n, and continue:
                 sibling._color = Node.Color.Black;
@@ -1274,8 +1311,9 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
                 else LeftRotate(parent);
                 isRightChild = IsRightChild(n);
                 sibling = isRightChild ? parent._left : parent._right;
+                Debug.Assert(sibling is { }, "Sibling should not be null during delete fixup.");
                 Debug.Assert(parent == n._parent, "Parent changed unexpectedly during delete fixup.");
-                if (sibling!._color == Node.Color.Red) continue;
+                if (sibling._color == Node.Color.Red) continue;
             }
 
             // Node's sibling is black.
@@ -1302,11 +1340,12 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
                     if (isRightChild) LeftRotate(sibling);
                     else RightRotate(sibling);
                     sibling = isRightChild ? parent._left : parent._right;
-                    oppositeDirNephew = isRightChild ? sibling!._left : sibling!._right;
+                    Debug.Assert(sibling is { }, "Sibling should not be null during delete fixup.");
+                    oppositeDirNephew = isRightChild ? sibling._left : sibling._right;
                 }
 
                 // Now, opposite dir nephew must be red:
-                Debug.Assert(oppositeDirNephew is { _color: Node.Color.Red }, "Opposite direction nephew is not red during delete fixup.");
+                Debug.Assert(oppositeDirNephew is { _color: Node.Color.Red }, "Opposite direction nephew is not red or is null during delete fixup.");
 
                 // Recolor sibling to parent's color, parent to black, opposite dir nephew to black, rotate parent in direction of n:
                 sibling._color = parent._color;
@@ -1483,7 +1522,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     }
 
     // The caller must hold the lock for the list when calling this.
-    // Throws if the wrong list (or null), and returns true if the node is still in the list, or false if not.
+    // Throws if the wrong list, and returns true if the node is still in the list, or false if not.
     private bool CheckNode(Node n)
     {
         if (n._list != this) ThrowNodeWrongList();
@@ -1497,7 +1536,6 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     /// <exception cref="ObjectDisposedException">If the instance has been disposed.</exception>
     public Node AddFirst(T value)
     {
-        ThrowIfNull(value);
         using var scope = EnterLock(out bool wasDisposed);
         if (wasDisposed) ThrowDisposed();
         return InsertAtHelper(value, 0);
@@ -1510,7 +1548,6 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     /// <exception cref="ObjectDisposedException">If the instance has been disposed.</exception>
     public Node AddLast(T value)
     {
-        ThrowIfNull(value);
         using var scope = EnterLock(out bool wasDisposed);
         if (wasDisposed) ThrowDisposed();
         return InsertAtHelper(value, _size);
@@ -1519,12 +1556,15 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     /// <summary>
     /// Adds a value at the specified index in the list - takes O(log n) time.
     /// </summary>
+    /// <remarks>
+    /// This method is considered unsafe, since nothing guarantees that the index didn't change between the time the index was obtained and the time this
+    /// method is called.
+    /// </remarks>
     /// <exception cref="ArgumentNullException">If the value is null.</exception>
     /// <exception cref="ObjectDisposedException">If the instance has been disposed.</exception>
     /// <exception cref="ArgumentOutOfRangeException">If the index is out of range.</exception>
-    public Node InsertAt(T value, nint index)
+    public Node UnsafeInsertAt(T value, nint index)
     {
-        ThrowIfNull(value);
         using var scope = EnterLock(out bool wasDisposed);
         if (wasDisposed) ThrowDisposed();
         if (index < 0 || index > _size) ThrowInvalidIndex(nameof(index));
@@ -1534,9 +1574,13 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     /// <summary>
     /// Gets the node at the specified index in the list - takes O(log n) time.
     /// </summary>
+    /// <remarks>
+    /// This method is considered unsafe, since nothing guarantees that the index didn't change between the time the index was obtained and the time this
+    /// method is called.
+    /// </remarks>
     /// <exception cref="ObjectDisposedException">If the instance has been disposed.</exception>
     /// <exception cref="ArgumentOutOfRangeException">If the index is out of range.</exception>
-    public Node GetNodeAt(nint index)
+    public Node UnsafeGetNodeAt(nint index)
     {
         using var scope = EnterLock(out bool wasDisposed);
         if (wasDisposed) ThrowDisposed();
@@ -1548,7 +1592,6 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     private Node? AddNear(Node currentNode, T value, bool allowNearRemovedNode, bool addBefore)
     {
         // Validate parameters:
-        ThrowIfNull(value);
         CheckNode(currentNode);
         bool movedAlready = false;
         while (true)
@@ -1636,7 +1679,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     /// <remarks>
     /// <para>The <see cref="AddBefore(Node, T)" /> override behaves as if <paramref name="allowBeforeRemovedNode"/> is <see langword="true" />.</para>
     /// <para>If a node has been removed, multiple adds near it might result in inconsistent ordering compared to if it was still in the list.</para>
-    /// <para>If adding next to a removed node, than the O(log n) runtime is no longer guaranteed.</para>
+    /// <para>If adding next to a removed node, then the O(log n) runtime is no longer guaranteed.</para>
     /// </remarks>
     /// <exception cref="ArgumentNullException">If the value is null.</exception>
     /// <exception cref="ObjectDisposedException">If the instance has been disposed.</exception>
@@ -1644,7 +1687,12 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     public Node? AddBefore(Node currentNode, T value, bool allowBeforeRemovedNode) => AddNear(currentNode, value, allowBeforeRemovedNode, addBefore: true);
 
     /// <inheritdoc cref="AddBefore(Node, T, bool)" />
-    public Node AddBefore(Node currentNode, T value) => AddBefore(currentNode, value, true)!;
+    public Node AddBefore(Node currentNode, T value)
+    {
+        var result = AddBefore(currentNode, value, true);
+        Debug.Assert(result is { }, "Result should not be null when allowing adding before removed node.");
+        return result;
+    }
 
     /// <summary>
     /// Adds a value after specified node of the list - takes O(log n) time.
@@ -1652,7 +1700,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     /// <remarks>
     /// <para>The <see cref="AddAfter(Node, T)" /> override behaves as if <paramref name="allowAfterRemovedNode"/> is <see langword="true" />.</para>
     /// <para>If a node has been removed, multiple adds near it might result in inconsistent ordering compared to if it was still in the list.</para>
-    /// <para>If adding next to a removed node, than the O(log n) runtime is no longer guaranteed.</para>
+    /// <para>If adding next to a removed node, then the O(log n) runtime is no longer guaranteed.</para>
     /// </remarks>
     /// <exception cref="ArgumentNullException">If the value is null.</exception>
     /// <exception cref="ObjectDisposedException">If the instance has been disposed.</exception>
@@ -1660,7 +1708,89 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     public Node? AddAfter(Node currentNode, T value, bool allowAfterRemovedNode) => AddNear(currentNode, value, allowAfterRemovedNode, addBefore: false);
 
     /// <inheritdoc cref="AddAfter(Node, T, bool)" />
-    public Node AddAfter(Node currentNode, T value) => AddAfter(currentNode, value, true)!;
+    public Node AddAfter(Node currentNode, T value)
+    {
+        var result = AddAfter(currentNode, value, true);
+        Debug.Assert(result is { }, "Result should not be null when allowing adding after removed node.");
+        return result;
+    }
+
+    private Node? TryInsertNear(T existingValue, T value, IEqualityComparer<T>? comparer, bool addBefore)
+    {
+        comparer ??= EqualityComparer<T>.Default;
+
+        var enumerator = GetEnumerator();
+        while (enumerator.MoveNext())
+        {
+            if (enumerator.WasAddedDuringEnumeration) continue;
+            var current = enumerator.CurrentNode;
+            var currentValue = enumerator.Current;
+            if (comparer.Equals(currentValue, existingValue))
+            {
+                using var scope = EnterLock(out bool wasDisposed);
+                if (wasDisposed) ThrowDisposed();
+
+                // Check if removed while we weren't holding the lock - we may as well make this somewhat atomic:
+                if (current._color != Node.Color.Removed)
+                {
+                    var result = AddNear(current, value, allowNearRemovedNode: false, addBefore);
+                    GC.KeepAlive(value);
+                    GC.KeepAlive(currentValue);
+                    Debug.Assert(result is not null, "Result should not be null when adding near non-removed node.");
+                    return result;
+                }
+            }
+
+            GC.KeepAlive(currentValue);
+        }
+
+        GC.KeepAlive(value);
+        return null;
+    }
+
+    /// <summary>
+    /// Tries to add a value before specified value of the list, or returns <see langword="null" /> - this method has the same runtime as
+    /// <see cref="GetEnumerator()" /> plus O(n * comparer.Equals).
+    /// </summary>
+    /// <exception cref="ArgumentNullException">If the value is null.</exception>
+    /// <exception cref="ObjectDisposedException">If the instance has been disposed.</exception>
+    public Node? TryInsertBefore(T existingValue, T value, IEqualityComparer<T>? comparer = null) => TryInsertNear(existingValue, value, comparer, addBefore: true);
+
+    /// <summary>
+    /// Tries to add a value before specified value of the list, or returns <see langword="null" /> - this method has the same runtime as
+    /// <see cref="GetEnumerator()" /> plus O(n * comparer.Equals).
+    /// </summary>
+    /// <exception cref="ArgumentNullException">If the value is null.</exception>
+    /// <exception cref="ObjectDisposedException">If the instance has been disposed.</exception>
+    public Node? TryInsertAfter(T existingValue, T value, IEqualityComparer<T>? comparer = null) => TryInsertNear(existingValue, value, comparer, addBefore: false);
+
+    /// <summary>
+    /// Tries to add a value before specified value of the list, or throws - this method has the same runtime as
+    /// <see cref="GetEnumerator()" /> plus O(n * comparer.Equals).
+    /// </summary>
+    /// <exception cref="ArgumentNullException">If the value is null.</exception>
+    /// <exception cref="ObjectDisposedException">If the instance has been disposed.</exception>
+    /// <exception cref="ArgumentException">If the specified existing value was not found.</exception>
+    public Node InsertBefore(T existingValue, T value, IEqualityComparer<T>? comparer = null)
+    {
+        var result = TryInsertNear(existingValue, value, comparer, addBefore: true);
+        if (result is null) ThrowArgumentExceptionForValueNotFound(nameof(existingValue));
+        return result;
+    }
+
+    /// <summary>
+    /// Tries to add a value before specified value of the list, or throws - this method has the same runtime as
+    /// <see cref="GetEnumerator()" /> plus O(n * comparer.Equals).
+    /// </summary>
+    /// <exception cref="ArgumentNullException">If the value is null.</exception>
+    /// <exception cref="ObjectDisposedException">If the instance has been disposed.</exception>
+    /// <exception cref="ArgumentException">If the specified existing value was not found.</exception>
+    public Node InsertAfter(T existingValue, T value, IEqualityComparer<T>? comparer = null)
+    {
+        var result = TryInsertNear(existingValue, value, comparer, addBefore: false);
+        if (result is null) ThrowArgumentExceptionForValueNotFound(nameof(existingValue));
+        return result;
+    }
 
     /// <summary>
     /// Structure for enumerating over nodes in the list.
@@ -1688,6 +1818,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         [EditorBrowsable(EditorBrowsableState.Never)]
         public readonly NodeEnumerator GetEnumerator() => this;
 
+        [MemberNotNullWhen(false, nameof(_list))]
         internal readonly bool IsDisposed()
         {
             return _list is null or { _root: null };
@@ -1722,8 +1853,8 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
 
             // Get the next node (unless it has been removed):
             Node? newNode = _currentNode;
-            bool isRemovedNode = true;
-            using (_list!.EnterLock(out bool wasDisposed))
+            bool isRemovedNode;
+            using (_list.EnterLock(out bool wasDisposed))
             {
                 if (wasDisposed) goto disposed;
                 newNode = _list.GetNextNode(newNode, out isRemovedNode);
@@ -1762,7 +1893,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
             // Get the previous node (unless it has been removed):
             Node? newNode = _currentNode;
             bool isRemovedNode = true;
-            using (_list!.EnterLock(out bool wasDisposed))
+            using (_list.EnterLock(out bool wasDisposed))
             {
                 if (wasDisposed) goto disposed;
                 newNode = _list.GetPrevNode(newNode, out isRemovedNode);
@@ -1812,22 +1943,22 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     /// <summary>
     /// Structure for enumerating over values in the list.
     /// </summary>
-    public struct ValueEnumerator
+    public struct Enumerator
     {
         internal NodeEnumerator _nodeEnumerator;
         private T? _value;
 
-        internal ValueEnumerator(NodeEnumerator nodeEnumerator)
+        internal Enumerator(NodeEnumerator nodeEnumerator)
         {
             _nodeEnumerator = nodeEnumerator;
             _value = null;
         }
 
         /// <summary>
-        /// Helper API to support enumerating over an instance of <see cref="ConcurrentWeakList{T}.ValueEnumerator" />.
+        /// Helper API to support enumerating over an instance of <see cref="ConcurrentWeakList{T}.Enumerator" />.
         /// </summary>
         [EditorBrowsable(EditorBrowsableState.Never)]
-        public readonly ValueEnumerator GetEnumerator() => this;
+        public readonly Enumerator GetEnumerator() => this;
 
         /// <summary>
         /// Gets the current node in the enumeration.
@@ -1921,12 +2052,12 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         }
     }
 
-    private sealed partial class HeapValueEnumerator(ValueEnumerator impl, bool reversed, bool skipNewNodes) : IEnumerator<T>
+    private sealed partial class HeapValueEnumerator(Enumerator impl, bool reversed, bool skipNewNodes) : IEnumerator<T>
     {
-        private ValueEnumerator _impl = impl;
+        private Enumerator _impl = impl;
 
-        public T Current => _impl.Current!;
-        object IEnumerator.Current => _impl.Current!;
+        public T Current => _impl.Current;
+        object IEnumerator.Current => _impl.Current;
         public void Dispose() => _impl = default;
 
         public bool MoveNext()
@@ -1942,7 +2073,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         public void Reset() => throw new NotSupportedException();
     }
 
-    private sealed partial class HeapValueEnumerable(ValueEnumerator impl, bool reversed, bool skipNewNodes) : IEnumerable<T>
+    private sealed partial class HeapValueEnumerable(Enumerator impl, bool reversed, bool skipNewNodes) : IEnumerable<T>
     {
         public IEnumerator<T> GetEnumerator()
         {
@@ -1980,7 +2111,9 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         public IEnumerator<Node> GetEnumerator()
         {
             var inst = impl;
-            inst._listVersion = impl._list!.Version._version;
+            var list = impl._list;
+            Debug.Assert(list is not null, "List should not be null, as we can only box enumerators while they're not disposed.");
+            inst._listVersion = list.Version._version;
             return new HeapNodeEnumerator(inst, reversed, skipNewNodes);
         }
 
@@ -1995,12 +2128,12 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     /// This function only enumerates the available values, and skips nodes whose values have been collected.
     /// </para>
     /// <para>
-    /// New nodes added during enumeration may be included in the enumeration, depending on timing; see <see cref="ValueEnumerator.WasAddedDuringEnumeration" />
-    /// and <see cref="ValueEnumerator.AsEnumerable(bool, bool)" /> for controlling this behavior.
+    /// New nodes added during enumeration may be included in the enumeration, depending on timing; see <see cref="Enumerator.WasAddedDuringEnumeration" />
+    /// and <see cref="Enumerator.AsEnumerable(bool, bool)" /> for controlling this behavior.
     /// </para>
     /// <inheritdoc cref="GetNodeEnumerator()" path="/remarks/*[position()>2]" />
     /// </remarks>
-    public ValueEnumerator GetEnumerator() => new(GetNodeEnumerator());
+    public Enumerator GetEnumerator() => new(GetNodeEnumerator());
 
     /// <summary>
     /// Gets an enumerator for the values in the list that enumerates from the <paramref name="startNode"/>.
@@ -2012,7 +2145,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     /// <inheritdoc cref="GetEnumerator()" path="/remarks/*" />
     /// </remarks>
     /// <exception cref="InvalidOperationException">If the specified node does not belong to this list.</exception>
-    public ValueEnumerator GetEnumerator(Node startNode) => new(GetNodeEnumerator(startNode));
+    public Enumerator GetEnumerator(Node startNode) => new(GetNodeEnumerator(startNode));
 
     /// <summary>
     /// Gets an enumerator for nodes in the list.
@@ -2135,6 +2268,54 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     }
 
     /// <summary>
+    /// Removes the first instance of the specified value from the list if it is in the list - this method has the same runtime as
+    /// <see cref="GetEnumerator()" /> plus O(n * comparer.Equals).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This method enumerates the list looking for a matching node; if nodes are added by other threads during the operation, they will not be included.
+    /// </para>
+    /// </remarks>
+    public bool Remove(T value, IEqualityComparer<T>? comparer = null)
+    {
+        comparer ??= EqualityComparer<T>.Default;
+
+        var enumerator = GetEnumerator();
+        while (enumerator.MoveNext())
+        {
+            if (enumerator.WasAddedDuringEnumeration) continue;
+            var current = enumerator.CurrentNode;
+            var currentValue = enumerator.Current;
+            if (comparer.Equals(currentValue, value))
+            {
+                // Make the operation somewhat atomic (i.e., if someone else removed it while we weren't holding the lock, we consider that as happened before
+                // us and thus not counting as a successful removal here):
+                using var scope = EnterLock(out bool wasDisposed);
+                if (wasDisposed)
+                {
+                    GC.KeepAlive(currentValue);
+                    break;
+                }
+                else if (current._color == Node.Color.Removed)
+                {
+                    GC.KeepAlive(currentValue);
+                    continue;
+                }
+
+                current.Dispose();
+                GC.KeepAlive(currentValue);
+                GC.KeepAlive(value);
+                return true;
+            }
+
+            GC.KeepAlive(currentValue);
+        }
+
+        GC.KeepAlive(value);
+        return false;
+    }
+
+    /// <summary>
     /// Removes all nodes from the list - takes O(n log n) time if no new nodes are added concurrently.
     /// </summary>
     /// <remarks>
@@ -2174,8 +2355,28 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         {
             if (enumerator.WasAddedDuringEnumeration) continue;
             var current = enumerator.CurrentNode;
-            var value = enumerator.Current;
-            if (match(value)) return (current, value);
+            var currentValue = enumerator.Current;
+            if (match(currentValue))
+            {
+                // Make the operation somewhat atomic (i.e., if someone else removed it while we weren't holding the lock, we consider that as happened before
+                // us and thus not counting as a successful find here):
+                using var scope = EnterLock(out bool wasDisposed);
+                if (wasDisposed)
+                {
+                    GC.KeepAlive(currentValue);
+                    break;
+                }
+                else if (current._color == Node.Color.Removed)
+                {
+                    GC.KeepAlive(currentValue);
+                    continue;
+                }
+
+                GC.KeepAlive(currentValue);
+                return (current, currentValue);
+            }
+
+            GC.KeepAlive(currentValue);
         }
 
         return null;
@@ -2200,18 +2401,57 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
             if (enumerator.WasAddedDuringEnumeration) continue;
             var current = enumerator.CurrentNode;
             var currentValue = enumerator.Current;
-            if (comparer.Equals(currentValue, value)) return (current, currentValue);
+            if (comparer.Equals(currentValue, value))
+            {
+                // Make the operation somewhat atomic (i.e., if someone else removed it while we weren't holding the lock, we consider that as happened before
+                // us and thus not counting as a successful find here):
+                using var scope = EnterLock(out bool wasDisposed);
+                if (wasDisposed)
+                {
+                    GC.KeepAlive(value);
+                    break;
+                }
+                else if (current._color == Node.Color.Removed)
+                {
+                    GC.KeepAlive(value);
+                    continue;
+                }
+
+                GC.KeepAlive(currentValue);
+                return (current, currentValue);
+            }
+
+            GC.KeepAlive(currentValue);
         }
 
         return null;
     }
 
     /// <summary>
+    /// Determins if the list contains any node that is considered equal according to the comparer - this method has the same runtime as
+    /// <see cref="GetEnumerator()" /> plus O(n * comparer.Equals).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This method enumerates the list looking for a matching node; if nodes are added by other threads during the operation, they will not be included.
+    /// </para>
+    /// </remarks>
+    public bool Contains(T value, IEqualityComparer<T>? comparer = null)
+    {
+        // Just delegate to Find:
+        return Find(value, comparer).HasValue;
+    }
+
+    /// <summary>
     /// Gets the index of the specified node in the list, or -1 if the node has been removed - takes O(log n) time.
     /// </summary>
+    /// <remarks>
+    /// This method is considered unsafe, since nothing guarantees that the index didn't change between the time the index was obtained and the time this
+    /// method is called.
+    /// </remarks>
     /// <exception cref="ObjectDisposedException">If the instance has been disposed.</exception>
-    /// <exception cref="InvalidOperationException">If the specified node has been does not belong to this list.</exception>
-    public nint GetIndexOfNode(Node node)
+    /// <exception cref="InvalidOperationException">If the specified node has not or does not belong to this list.</exception>
+    public nint UnsafeGetIndexOfNode(Node node)
     {
         using var scope = EnterLock(out bool wasDisposed);
         if (wasDisposed) ThrowDisposed();

@@ -15,9 +15,9 @@ public class GetNodeIndexTests
         var node3 = list.AddLast(value3);
 
         // Check first, middle, and last node indices
-        list.GetIndexOfNode(node1).ShouldBe((nint)0);
-        list.GetIndexOfNode(node2).ShouldBe((nint)1);
-        list.GetIndexOfNode(node3).ShouldBe((nint)2);
+        list.UnsafeGetIndexOfNode(node1).ShouldBe((nint)0);
+        list.UnsafeGetIndexOfNode(node2).ShouldBe((nint)1);
+        list.UnsafeGetIndexOfNode(node3).ShouldBe((nint)2);
 
         GC.KeepAlive(value1);
         GC.KeepAlive(value2);
@@ -31,7 +31,7 @@ public class GetNodeIndexTests
         object value = new();
         var node = list.AddLast(value);
 
-        list.GetIndexOfNode(node).ShouldBe((nint)0);
+        list.UnsafeGetIndexOfNode(node).ShouldBe((nint)0);
 
         GC.KeepAlive(value);
     }
@@ -49,7 +49,7 @@ public class GetNodeIndexTests
 
         list.Remove(node2);
 
-        list.GetIndexOfNode(node2).ShouldBe((nint)(-1));
+        list.UnsafeGetIndexOfNode(node2).ShouldBe((nint)(-1));
 
         GC.KeepAlive(value1);
         GC.KeepAlive(value2);
@@ -65,7 +65,7 @@ public class GetNodeIndexTests
 
         node.Dispose();
 
-        list.GetIndexOfNode(node).ShouldBe((nint)(-1));
+        list.UnsafeGetIndexOfNode(node).ShouldBe((nint)(-1));
 
         GC.KeepAlive(value);
     }
@@ -85,21 +85,21 @@ public class GetNodeIndexTests
 
         // Remove first node - others should shift down
         list.Remove(node1);
-        list.GetIndexOfNode(node1).ShouldBe((nint)(-1));
-        list.GetIndexOfNode(node2).ShouldBe((nint)0);
-        list.GetIndexOfNode(node3).ShouldBe((nint)1);
-        list.GetIndexOfNode(node4).ShouldBe((nint)2);
+        list.UnsafeGetIndexOfNode(node1).ShouldBe((nint)(-1));
+        list.UnsafeGetIndexOfNode(node2).ShouldBe((nint)0);
+        list.UnsafeGetIndexOfNode(node3).ShouldBe((nint)1);
+        list.UnsafeGetIndexOfNode(node4).ShouldBe((nint)2);
 
         // Remove last node - others should be unchanged
         list.Remove(node4);
-        list.GetIndexOfNode(node4).ShouldBe((nint)(-1));
-        list.GetIndexOfNode(node2).ShouldBe((nint)0);
-        list.GetIndexOfNode(node3).ShouldBe((nint)1);
+        list.UnsafeGetIndexOfNode(node4).ShouldBe((nint)(-1));
+        list.UnsafeGetIndexOfNode(node2).ShouldBe((nint)0);
+        list.UnsafeGetIndexOfNode(node3).ShouldBe((nint)1);
 
         // Remove middle node
         list.Remove(node3);
-        list.GetIndexOfNode(node3).ShouldBe((nint)(-1));
-        list.GetIndexOfNode(node2).ShouldBe((nint)0);
+        list.UnsafeGetIndexOfNode(node3).ShouldBe((nint)(-1));
+        list.UnsafeGetIndexOfNode(node2).ShouldBe((nint)0);
 
         GC.KeepAlive(value1);
         GC.KeepAlive(value2);
@@ -124,11 +124,11 @@ public class GetNodeIndexTests
         var node2 = list.AddAfter(node1, value2); // Position 1
         var node4 = list.AddBefore(node5, value4); // Position 3
 
-        list.GetIndexOfNode(node1).ShouldBe((nint)0);
-        list.GetIndexOfNode(node2).ShouldBe((nint)1);
-        list.GetIndexOfNode(node3).ShouldBe((nint)2);
-        list.GetIndexOfNode(node4).ShouldBe((nint)3);
-        list.GetIndexOfNode(node5).ShouldBe((nint)4);
+        list.UnsafeGetIndexOfNode(node1).ShouldBe((nint)0);
+        list.UnsafeGetIndexOfNode(node2).ShouldBe((nint)1);
+        list.UnsafeGetIndexOfNode(node3).ShouldBe((nint)2);
+        list.UnsafeGetIndexOfNode(node4).ShouldBe((nint)3);
+        list.UnsafeGetIndexOfNode(node5).ShouldBe((nint)4);
 
         GC.KeepAlive(value1);
         GC.KeepAlive(value2);
@@ -146,7 +146,7 @@ public class GetNodeIndexTests
 
         for (int i = 0; i < nodes.Count; i++)
         {
-            list.GetIndexOfNode(nodes[i]).ShouldBe((nint)i);
+            list.UnsafeGetIndexOfNode(nodes[i]).ShouldBe((nint)i);
         }
 
         GC.KeepAlive(values);
@@ -168,7 +168,7 @@ public class GetNodeIndexTests
         // Verify removed nodes return -1
         for (int i = 1; i < nodes.Count; i += 2)
         {
-            list.GetIndexOfNode(nodes[i]).ShouldBe((nint)(-1));
+            list.UnsafeGetIndexOfNode(nodes[i]).ShouldBe((nint)(-1));
         }
 
         // Verify remaining count
@@ -177,7 +177,7 @@ public class GetNodeIndexTests
         // Verify remaining nodes have correct indices (0, 2, 4, ... become 0, 1, 2, ...)
         for (int i = 0; i < nodes.Count; i += 2)
         {
-            list.GetIndexOfNode(nodes[i]).ShouldBe((nint)(i / 2));
+            list.UnsafeGetIndexOfNode(nodes[i]).ShouldBe((nint)(i / 2));
         }
 
         GC.KeepAlive(values);
@@ -191,7 +191,7 @@ public class GetNodeIndexTests
         object value = new();
         var node = list1.AddLast(value);
 
-        Should.Throw<InvalidOperationException>(() => list2.GetIndexOfNode(node));
+        Should.Throw<InvalidOperationException>(() => list2.UnsafeGetIndexOfNode(node));
 
         GC.KeepAlive(value);
     }
@@ -204,8 +204,16 @@ public class GetNodeIndexTests
         var node = list.AddLast(value);
         list.Dispose();
 
-        Should.Throw<ObjectDisposedException>(() => list.GetIndexOfNode(node));
+        Should.Throw<ObjectDisposedException>(() => list.UnsafeGetIndexOfNode(node));
 
         GC.KeepAlive(value);
+    }
+
+    [TestMethod]
+    public void GetIndexOfNullNodeThrows()
+    {
+        var list = new ConcurrentWeakList<object>();
+
+        Should.Throw<ArgumentNullException>(() => list.UnsafeGetIndexOfNode(null!));
     }
 }

@@ -48,7 +48,7 @@ public class FuzzTests
                         break;
                     case 2:
                         idx = r.Next(actualList.Count + 1);
-                        newNode = weakList.InsertAt(newValue, idx);
+                        newNode = weakList.UnsafeInsertAt(newValue, idx);
                         actualList.Insert(idx, newValue);
                         nodes.Insert(idx, newNode);
                         break;
@@ -88,11 +88,29 @@ public class FuzzTests
             for (int j = 0; j < nodes.Count; j++)
             {
                 var node = nodes[j];
-                weakList.GetIndexOfNode(node).ShouldBe(j); // This also checks GetNodeAtImpl in debug mode, since GetIndexOfNode checks it.
+                weakList.UnsafeGetIndexOfNode(node).ShouldBe(j); // This also checks GetNodeAtImpl in debug mode, since GetIndexOfNode checks it.
             }
         }
 
         // Keep values that are still in the list alive:
         GC.KeepAlive(actualList);
+    }
+
+    // It's not worth making a new file just for these 2 - here is good enough:
+
+    [TestMethod]
+    public void UnsafePerformLockedOperationWithNullOperationThrows()
+    {
+        var list = new ConcurrentWeakList<object>();
+
+        Should.Throw<ArgumentNullException>(() => list.UnsafePerformLockedOperation(0, null!));
+    }
+
+    [TestMethod]
+    public void UnsafeTryPerformLockedOperationWithNullOperationThrows()
+    {
+        var list = new ConcurrentWeakList<object>();
+
+        Should.Throw<ArgumentNullException>(() => list.UnsafeTryPerformLockedOperation(0, null!));
     }
 }

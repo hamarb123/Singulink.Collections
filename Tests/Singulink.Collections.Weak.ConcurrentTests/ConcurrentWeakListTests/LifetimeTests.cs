@@ -184,7 +184,7 @@ public class LifetimeTests
     }
 
     [TestMethod]
-    public void ClearAllowsAllowsNodeToDie()
+    public void ClearAllowsNodeToDie()
     {
         ConcurrentWeakList<object> list = new();
 
@@ -204,7 +204,7 @@ public class LifetimeTests
     }
 
     [TestMethod]
-    public void DisposeAllowsAllowsNodeToDie()
+    public void DisposeAllowsNodeToDie()
     {
         ConcurrentWeakList<object> list = new();
 

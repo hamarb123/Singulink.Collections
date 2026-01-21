@@ -1015,4 +1015,20 @@ public class EnumerationTests
 
         GC.KeepAlive(values);
     }
+
+    [TestMethod]
+    public void GetEnumeratorWithNullStartNodeThrows()
+    {
+        var list = new ConcurrentWeakList<object>();
+
+        Should.Throw<ArgumentNullException>(() => list.GetEnumerator(null!));
+    }
+
+    [TestMethod]
+    public void GetNodeEnumeratorWithNullStartNodeThrows()
+    {
+        var list = new ConcurrentWeakList<object>();
+
+        Should.Throw<ArgumentNullException>(() => list.GetNodeEnumerator(null!));
+    }
 }

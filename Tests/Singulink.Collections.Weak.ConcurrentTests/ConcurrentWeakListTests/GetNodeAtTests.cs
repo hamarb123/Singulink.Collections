@@ -10,7 +10,7 @@ public class GetNodeAtTests
         object value = new();
         var expectedNode = list.AddLast(value);
 
-        var node = list.GetNodeAt(0);
+        var node = list.UnsafeGetNodeAt(0);
 
         node.ShouldBeSameAs(expectedNode);
         node.Value.ShouldBeSameAs(value);
@@ -29,9 +29,9 @@ public class GetNodeAtTests
         var node2 = list.AddLast(value2);
         var node3 = list.AddLast(value3);
 
-        list.GetNodeAt(0).ShouldBeSameAs(node1);
-        list.GetNodeAt(1).ShouldBeSameAs(node2);
-        list.GetNodeAt(2).ShouldBeSameAs(node3);
+        list.UnsafeGetNodeAt(0).ShouldBeSameAs(node1);
+        list.UnsafeGetNodeAt(1).ShouldBeSameAs(node2);
+        list.UnsafeGetNodeAt(2).ShouldBeSameAs(node3);
 
         GC.KeepAlive(value1);
         GC.KeepAlive(value2);
@@ -47,7 +47,7 @@ public class GetNodeAtTests
 
         for (int i = 0; i < nodes.Count; i++)
         {
-            list.GetNodeAt(i).ShouldBeSameAs(nodes[i]);
+            list.UnsafeGetNodeAt(i).ShouldBeSameAs(nodes[i]);
         }
 
         GC.KeepAlive(values);
@@ -67,8 +67,8 @@ public class GetNodeAtTests
         list.Remove(node1);
 
         // After removing node1, node2 should be at index 0 and node3 at index 1
-        list.GetNodeAt(0).ShouldBeSameAs(node2);
-        list.GetNodeAt(1).ShouldBeSameAs(node3);
+        list.UnsafeGetNodeAt(0).ShouldBeSameAs(node2);
+        list.UnsafeGetNodeAt(1).ShouldBeSameAs(node3);
 
         GC.KeepAlive(value1);
         GC.KeepAlive(value2);
@@ -88,8 +88,8 @@ public class GetNodeAtTests
 
         list.Remove(node2);
 
-        list.GetNodeAt(0).ShouldBeSameAs(node1);
-        list.GetNodeAt(1).ShouldBeSameAs(node3);
+        list.UnsafeGetNodeAt(0).ShouldBeSameAs(node1);
+        list.UnsafeGetNodeAt(1).ShouldBeSameAs(node3);
 
         GC.KeepAlive(value1);
         GC.KeepAlive(value2);
@@ -107,14 +107,14 @@ public class GetNodeAtTests
 
         var node1 = list.AddLast(value1);
         var node3 = list.AddLast(value3);
-        var node2 = list.InsertAt(value2, 1);
+        var node2 = list.UnsafeInsertAt(value2, 1);
         var node4 = list.AddFirst(value4);
 
         // Expected order: value4, value1, value2, value3
-        list.GetNodeAt(0).ShouldBeSameAs(node4);
-        list.GetNodeAt(1).ShouldBeSameAs(node1);
-        list.GetNodeAt(2).ShouldBeSameAs(node2);
-        list.GetNodeAt(3).ShouldBeSameAs(node3);
+        list.UnsafeGetNodeAt(0).ShouldBeSameAs(node4);
+        list.UnsafeGetNodeAt(1).ShouldBeSameAs(node1);
+        list.UnsafeGetNodeAt(2).ShouldBeSameAs(node2);
+        list.UnsafeGetNodeAt(3).ShouldBeSameAs(node3);
 
         GC.KeepAlive(value1);
         GC.KeepAlive(value2);
@@ -129,7 +129,7 @@ public class GetNodeAtTests
         object value = new();
         list.AddLast(value);
 
-        Should.Throw<ArgumentOutOfRangeException>(() => list.GetNodeAt(-1));
+        Should.Throw<ArgumentOutOfRangeException>(() => list.UnsafeGetNodeAt(-1));
 
         GC.KeepAlive(value);
     }
@@ -141,7 +141,7 @@ public class GetNodeAtTests
         object value = new();
         list.AddLast(value);
 
-        Should.Throw<ArgumentOutOfRangeException>(() => list.GetNodeAt(1));
+        Should.Throw<ArgumentOutOfRangeException>(() => list.UnsafeGetNodeAt(1));
 
         GC.KeepAlive(value);
     }
@@ -153,7 +153,7 @@ public class GetNodeAtTests
         object value = new();
         list.AddLast(value);
 
-        Should.Throw<ArgumentOutOfRangeException>(() => list.GetNodeAt(5));
+        Should.Throw<ArgumentOutOfRangeException>(() => list.UnsafeGetNodeAt(5));
 
         GC.KeepAlive(value);
     }
@@ -163,7 +163,7 @@ public class GetNodeAtTests
     {
         var list = new ConcurrentWeakList<object>();
 
-        Should.Throw<ArgumentOutOfRangeException>(() => list.GetNodeAt(0));
+        Should.Throw<ArgumentOutOfRangeException>(() => list.UnsafeGetNodeAt(0));
     }
 
     [TestMethod]
@@ -174,7 +174,7 @@ public class GetNodeAtTests
         list.AddLast(value);
         list.Dispose();
 
-        Should.Throw<ObjectDisposedException>(() => list.GetNodeAt(0));
+        Should.Throw<ObjectDisposedException>(() => list.UnsafeGetNodeAt(0));
 
         GC.KeepAlive(value);
     }
@@ -197,10 +197,10 @@ public class GetNodeAtTests
         var node5 = list.AddBefore(node3, value5);
 
         // Expected order: value1, value4, value5, value3
-        list.GetNodeAt(0).ShouldBeSameAs(node1);
-        list.GetNodeAt(1).ShouldBeSameAs(node4);
-        list.GetNodeAt(2).ShouldBeSameAs(node5);
-        list.GetNodeAt(3).ShouldBeSameAs(node3);
+        list.UnsafeGetNodeAt(0).ShouldBeSameAs(node1);
+        list.UnsafeGetNodeAt(1).ShouldBeSameAs(node4);
+        list.UnsafeGetNodeAt(2).ShouldBeSameAs(node5);
+        list.UnsafeGetNodeAt(3).ShouldBeSameAs(node3);
 
         GC.KeepAlive(value1);
         GC.KeepAlive(value2);

@@ -107,7 +107,7 @@ public class AddTests
         var list = new ConcurrentWeakList<object>();
         object value = new();
 
-        var node = list.InsertAt(value, 0);
+        var node = list.UnsafeInsertAt(value, 0);
 
         list.Count.ShouldBe(1);
         node.Value.ShouldBeSameAs(value);
@@ -124,7 +124,7 @@ public class AddTests
         object value2 = new();
         list.AddLast(value1);
 
-        var node = list.InsertAt(value2, 0);
+        var node = list.UnsafeInsertAt(value2, 0);
 
         list.Count.ShouldBe(2);
         node.Value.ShouldBeSameAs(value2);
@@ -142,7 +142,7 @@ public class AddTests
         object value2 = new();
         list.AddLast(value1);
 
-        var node = list.InsertAt(value2, 1);
+        var node = list.UnsafeInsertAt(value2, 1);
 
         list.Count.ShouldBe(2);
         node.Value.ShouldBeSameAs(value2);
@@ -162,7 +162,7 @@ public class AddTests
         list.AddLast(value1);
         list.AddLast(value3);
 
-        var node = list.InsertAt(value2, 1);
+        var node = list.UnsafeInsertAt(value2, 1);
 
         list.Count.ShouldBe(3);
         node.Value.ShouldBeSameAs(value2);
@@ -181,10 +181,10 @@ public class AddTests
 
         // Build list: [0], [1, 0], [1, 2, 0], [1, 2, 3, 0], [1, 4, 2, 3, 0]
         list.AddLast(values[0]);
-        list.InsertAt(values[1], 0);
-        list.InsertAt(values[2], 1);
-        list.InsertAt(values[3], 2);
-        list.InsertAt(values[4], 1);
+        list.UnsafeInsertAt(values[1], 0);
+        list.UnsafeInsertAt(values[2], 1);
+        list.UnsafeInsertAt(values[3], 2);
+        list.UnsafeInsertAt(values[4], 1);
 
         list.Count.ShouldBe(5);
         list.ToList().ShouldBe([values[1], values[4], values[2], values[3], values[0]]);
@@ -198,7 +198,7 @@ public class AddTests
         var list = new ConcurrentWeakList<object>();
         object value = new();
 
-        Should.Throw<ArgumentOutOfRangeException>(() => list.InsertAt(value, -1));
+        Should.Throw<ArgumentOutOfRangeException>(() => list.UnsafeInsertAt(value, -1));
 
         GC.KeepAlive(value);
     }
@@ -210,7 +210,7 @@ public class AddTests
         object value = new();
         list.AddLast(new object());
 
-        Should.Throw<ArgumentOutOfRangeException>(() => list.InsertAt(value, 2));
+        Should.Throw<ArgumentOutOfRangeException>(() => list.UnsafeInsertAt(value, 2));
 
         GC.KeepAlive(value);
     }
@@ -236,7 +236,7 @@ public class AddTests
     {
         var list = new ConcurrentWeakList<object>();
 
-        Should.Throw<ArgumentNullException>(() => list.InsertAt(null!, 0));
+        Should.Throw<ArgumentNullException>(() => list.UnsafeInsertAt(null!, 0));
     }
 
     [TestMethod]
@@ -264,6 +264,22 @@ public class AddTests
     }
 
     [TestMethod]
+    public void AddBeforeNullNodeThrows()
+    {
+        var list = new ConcurrentWeakList<object>();
+
+        Should.Throw<ArgumentNullException>(() => list.AddBefore(null!, new object()));
+    }
+
+    [TestMethod]
+    public void AddAfterNullNodeThrows()
+    {
+        var list = new ConcurrentWeakList<object>();
+
+        Should.Throw<ArgumentNullException>(() => list.AddAfter(null!, new object()));
+    }
+
+    [TestMethod]
     public void AddFirstOnDisposedListThrows()
     {
         var list = new ConcurrentWeakList<object>();
@@ -287,7 +303,7 @@ public class AddTests
         var list = new ConcurrentWeakList<object>();
         list.Dispose();
 
-        Should.Throw<ObjectDisposedException>(() => list.InsertAt(new object(), 0));
+        Should.Throw<ObjectDisposedException>(() => list.UnsafeInsertAt(new object(), 0));
     }
 
     [TestMethod]
@@ -394,7 +410,7 @@ public class AddTests
 
         newNode1.ShouldNotBeNull();
         list.Count.ShouldBe(3);
-        list.GetIndexOfNode(newNode1).ShouldBe((nint)1);
+        list.UnsafeGetIndexOfNode(newNode1).ShouldBe((nint)1);
         list.ToList().ShouldBe([value1, newValue1, value3]);
 
         // Additional calls should still succeed (position not guaranteed after first, since base node is removed)
@@ -517,7 +533,7 @@ public class AddTests
 
         newNode1.ShouldNotBeNull();
         list.Count.ShouldBe(3);
-        list.GetIndexOfNode(newNode1).ShouldBe((nint)1);
+        list.UnsafeGetIndexOfNode(newNode1).ShouldBe((nint)1);
         list.ToList().ShouldBe([value1, newValue1, value3]);
 
         // Additional calls should still succeed (position not guaranteed after first, since base node is removed)
@@ -580,7 +596,7 @@ public class AddTests
         list.AddLast(value2);
         list.Count.ShouldBe(2);
 
-        var node = list.InsertAt(value3, 1);
+        var node = list.UnsafeInsertAt(value3, 1);
         list.Count.ShouldBe(3);
 
         list.AddBefore(node, value4);
@@ -656,7 +672,7 @@ public class AddTests
         // Verify nodes return correct values at each position
         for (int i = 0; i < list.Count; i++)
         {
-            var node = list.GetNodeAt(i);
+            var node = list.UnsafeGetNodeAt(i);
             node.Value.ShouldBeSameAs(expectedOrder[i]);
         }
 
@@ -684,7 +700,7 @@ public class AddTests
             object value = new();
             int insertPos = (i % (expectedOrder.Count - 1)) + 1; // Always insert somewhere in the middle
             expectedOrder.Insert(insertPos, value);
-            list.InsertAt(value, insertPos);
+            list.UnsafeInsertAt(value, insertPos);
         }
 
         list.Count.ShouldBe(50);
@@ -693,7 +709,7 @@ public class AddTests
         // Verify nodes return correct values at each position
         for (int i = 0; i < list.Count; i++)
         {
-            var node = list.GetNodeAt(i);
+            var node = list.UnsafeGetNodeAt(i);
             node.Value.ShouldBeSameAs(expectedOrder[i]);
             node.IsRemoved.ShouldBeFalse();
         }
@@ -735,13 +751,13 @@ public class AddTests
         // Verify nodes return correct values at each position
         for (int i = 0; i < list.Count; i++)
         {
-            var node = list.GetNodeAt(i);
+            var node = list.UnsafeGetNodeAt(i);
             node.Value.ShouldBeSameAs(expectedOrder[i]);
             node.IsRemoved.ShouldBeFalse();
         }
 
         // Verify anchor is still at the expected position
-        list.GetIndexOfNode(anchorNode).ShouldBe((nint)anchorIndex);
+        list.UnsafeGetIndexOfNode(anchorNode).ShouldBe((nint)anchorIndex);
 
         GC.KeepAlive(expectedOrder);
     }
@@ -773,14 +789,14 @@ public class AddTests
         {
             object value = new();
             values.Add(value);
-            list.InsertAt(value, (i * 2) % list.Count);
+            list.UnsafeInsertAt(value, (i * 2) % list.Count);
         }
 
         // Verify remaining structure - nodes match ToList output
         var listContents = list.ToList();
         for (int i = 0; i < list.Count; i++)
         {
-            var node = list.GetNodeAt(i);
+            var node = list.UnsafeGetNodeAt(i);
             node.Value.ShouldBeSameAs(listContents[i]);
             node.IsRemoved.ShouldBeFalse();
         }

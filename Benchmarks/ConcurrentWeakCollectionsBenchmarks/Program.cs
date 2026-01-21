@@ -63,7 +63,7 @@ public class Benchs
     public void AddRemoveNodeRandomPosition()
     {
         ConcurrentWeakList<object> list = _list;
-        var node = list.InsertAt(_value, _random.Next(0, N + 1));
+        var node = list.UnsafeInsertAt(_value, _random.Next(0, N + 1));
         list.Remove(node);
     }
 
@@ -77,7 +77,7 @@ public class Benchs
         ref var nodeSlot = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_nodes), (uint)idx)!;
         object oldValue = Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_values), (uint)idx)!;
         list.Remove(nodeSlot);
-        nodeSlot = list.InsertAt(oldValue, _random.Next(0, n));
+        nodeSlot = list.UnsafeInsertAt(oldValue, _random.Next(0, n));
     }
 
     [Benchmark]

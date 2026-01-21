@@ -386,4 +386,12 @@ public class RemoveTests
 
         GC.KeepAlive(values);
     }
+
+    [TestMethod]
+    public void RemoveNullNodeThrows()
+    {
+        var list = new ConcurrentWeakList<object>();
+
+        Should.Throw<ArgumentNullException>(() => list.Remove((ConcurrentWeakList<object>.Node)null!));
+    }
 }
