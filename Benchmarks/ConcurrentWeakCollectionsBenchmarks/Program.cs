@@ -10,6 +10,8 @@ using BenchmarkDotNet.Reports;
 using BenchmarkDotNet.Running;
 using Singulink.Collections;
 
+// Note: this project must be run like: dotnet build -c NS20 && dotnet build -c NS21 && dotnet run -c Release -f net10.0 -p:DryRun=true && dotnet run -c Release -f net10.0 -p:DryRun=true && dotnet run -c Release -f net10.0
+
 BenchmarkRunner.Run<Benchs>(args: args);
 
 /*
@@ -22,10 +24,14 @@ BenchmarkRunner.Run<Benchs>(args: args);
         _ = ((Func<object>)([MethodImpl(MethodImplOptions.NoInlining)] () => new long[1000]))();
 #elif NET9_0
         _ = ((Func<object>)([MethodImpl(MethodImplOptions.NoInlining)] () => new long[2000]))();
-#elif NETSTANDARD2_1_OR_GREATER
+#elif NET8_0
         _ = ((Func<object>)([MethodImpl(MethodImplOptions.NoInlining)] () => new long[3000]))();
-#elif NETSTANDARD
+#elif NET6_0
         _ = ((Func<object>)([MethodImpl(MethodImplOptions.NoInlining)] () => new long[4000]))();
+#elif NETSTANDARD2_1_OR_GREATER
+        _ = ((Func<object>)([MethodImpl(MethodImplOptions.NoInlining)] () => new long[5000]))();
+#elif NETSTANDARD
+        _ = ((Func<object>)([MethodImpl(MethodImplOptions.NoInlining)] () => new long[6000]))();
 #endif
 
     This allows validating that it is indeed running with the correct build of the library, as the allocated memory is substantially larger than what would
@@ -36,28 +42,72 @@ public class MyConfig : ManualConfig
 {
     public MyConfig()
     {
-        AddJob(Job.Default
+#if DRY
+        var baseJob = Job.Dry;
+#else
+        var baseJob = Job.Default;
+#endif
+
+        AddJob(baseJob
             .WithRuntime(CoreRuntime.Core10_0)
             .WithId(".NET 10.0")
+#if DRY
+            .WithMsBuildArguments("/p:DryRun=true")
+#endif
             .AsBaseline());
 
-        AddJob(Job.Default
+#if !DRY
+        AddJob(baseJob
             .WithRuntime(CoreRuntime.Core90)
             .WithId(".NET 9.0"));
 
-        AddJob(Job.Default
+        AddJob(baseJob
             .WithRuntime(CoreRuntime.Core80)
-            .WithId(".NET 8.0 (.NET Standard 2.1)"));
+            .WithId(".NET 8.0"));
 
-        AddJob(Job.Default
+        AddJob(baseJob
             .WithRuntime(CoreRuntime.Core60)
-            .WithId(".NET 6.0 (.NET Standard 2.0)"));
+            .WithId(".NET 6.0"));
+#endif
 
-        WithOrderer(new JobOrderer(".NET 10.0", ".NET 9.0", ".NET 8.0 (.NET Standard 2.1)", ".NET 6.0 (.NET Standard 2.0)"));
+        AddJob(baseJob
+            .WithRuntime(CoreRuntime.Core10_0)
+            .WithId(".NET 10.0 (.NET Standard 2.1)")
+            .WithCustomBuildConfiguration("NS21")
+#if DRY
+            .WithMsBuildArguments("/p:Configurations=NS21", "/p:Optimize=true", "/p:Deterministic=true", "/p:DryRun=true"));
+#else
+            .WithMsBuildArguments("/p:Configurations=NS21", "/p:Optimize=true", "/p:Deterministic=true"));
+#endif
 
-        WithOption(ConfigOptions.DisableParallelBuild, true);
+        AddJob(baseJob
+            .WithRuntime(CoreRuntime.Core10_0)
+            .WithId(".NET 10.0 (.NET Standard 2.0)")
+            .WithCustomBuildConfiguration("NS20")
+#if DRY
+            .WithMsBuildArguments("/p:Configurations=NS20", "/p:Optimize=true", "/p:Deterministic=true", "/p:DryRun=true"));
+#else
+            .WithMsBuildArguments("/p:Configurations=NS20", "/p:Optimize=true", "/p:Deterministic=true"));
+#endif
+
+#if !DRY
+#if NET
+        if (OperatingSystem.IsWindows())
+#endif
+        {
+            AddJob(baseJob
+                .WithRuntime(ClrRuntime.Net48)
+                .WithId(".NET Framework 4.8"));
+        }
+#endif
+
+        WithOrderer(new JobOrderer(".NET 10.0", ".NET 9.0", ".NET 8.0", ".NET 6.0", ".NET 10.0 (.NET Standard 2.1)", ".NET 10.0 (.NET Standard 2.0)", ".NET Framework 4.8"));
 
         HideColumns(Column.Runtime);
+        HideColumns(Column.Arguments);
+        HideColumns(Column.BuildConfiguration);
+
+        WithOption(ConfigOptions.KeepBenchmarkFiles, true);
     }
 }
 
@@ -84,6 +134,10 @@ public class JobOrderer : DefaultOrderer
 [Config(typeof(MyConfig))]
 public class Benchs
 {
+#if DRY
+    [Benchmark]
+    public void DryRun() { }
+#else
     [Params(0, 1, 3, 10, 30, 100, 300, 1000, 3000, 10000)]
     public int N { get; set; }
 
@@ -142,8 +196,13 @@ public class Benchs
         int n = N;
         if (n == 0) return;
         int idx = _random.Next(0, n);
-        ref var nodeSlot = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_nodes), (uint)idx)!;
-        object oldValue = Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_values), (uint)idx)!;
+#if NET
+        static ref T GetArrayDataReference<T>(T[] array) => ref MemoryMarshal.GetArrayDataReference(array);
+#else
+        static ref T GetArrayDataReference<T>(T[] array) => ref MemoryMarshal.GetReference((ReadOnlySpan<T>)array);
+#endif
+        ref var nodeSlot = ref Unsafe.Add(ref GetArrayDataReference(_nodes), (uint)idx)!;
+        object oldValue = Unsafe.Add(ref GetArrayDataReference(_values), (uint)idx)!;
         list.Remove(nodeSlot);
         nodeSlot = list.UnsafeInsertAt(oldValue, _random.Next(0, n));
     }
@@ -250,4 +309,5 @@ public class Benchs
 
         GC.KeepAlive(value);
     }
+#endif
 }
