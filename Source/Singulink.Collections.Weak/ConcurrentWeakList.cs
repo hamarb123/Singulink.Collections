@@ -940,11 +940,18 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
             n._node = null;
         }
 
-#if NET
         // Suppress finalizer for this list now, as we've cleaned up everything:
         GC.SuppressFinalize(this);
-        GC.KeepAlive(this); // Ensure that if we call this method, nothing tries to run the finalizer after we've cleaned up
-#endif
+    }
+
+    /// <summary>
+    /// Finalizes an instance of the <see cref="ConcurrentWeakList{T}"/> class.
+    /// </summary>
+    ~ConcurrentWeakList()
+    {
+        // We want to block usage after potential resurrection (as it could be dangerous), as it could be actively problematic, so mark as disposed now:
+        _root = null;
+        Thread.MemoryBarrier();
     }
 
     // The caller must hold the lock for the list when calling this and have already checked for disposal.
