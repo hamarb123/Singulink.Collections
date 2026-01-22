@@ -102,6 +102,7 @@ file static class Helpers
 /// always add a new node just after an enumeration's current node, then it will have to loop through all of those until it gets past them).</para>
 /// <para>For optimal performance, avoid letting the finalizer run; instead, dispose the list explicitly or clear it - otherwise, the finalizer thread may be
 /// blocked for a significant amount of time if the list is large.</para>
+/// <para>Note: this type is not safe to resurrect, or use in a partially finalized state.</para>
 /// </remarks>
 public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable where T : class
 {
@@ -115,19 +116,19 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     private WeakReference<ConditionalWeakTable<T, CwtEntry>>? _cwtWeakRef;
     private LinkedList<WeakReference<CwtEntry>>? _cwtKeys = new();
     private ConditionalWeakTable<T, CwtEntry>.CreateValueCallback _createValueCallback;
-    internal sealed class CwtEntry(ConditionalWeakTable<T, CwtEntry> cwt, object locker)
+    internal sealed class CwtEntry(ConditionalWeakTable<T, CwtEntry> cwt, WeakReference<object> locker)
     {
         public WeakReference<T> Key;
         public LinkedListNode<WeakReference<CwtEntry>>? KeyNode;
         public LinkedList<InternalNode>? Entries = [];
         public WeakReference<ConditionalWeakTable<T, CwtEntry>> Cwt = new(cwt);
-        public object Locker = locker;
+        public WeakReference<object> Locker = locker;
 
         ~CwtEntry()
         {
-            lock (Locker)
+            if (Locker.TryGetTarget(out var locker) && Cwt.TryGetTarget(out var cwt) && Key.TryGetTarget(out var key))
             {
-                if (Cwt.TryGetTarget(out var cwt) && Key.TryGetTarget(out var key))
+                lock (locker)
                 {
                     if (cwt.TryGetValue(key, out var otherEntry))
                     {
@@ -137,6 +138,10 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
                         }
                     }
                 }
+
+                GC.KeepAlive(locker);
+                GC.KeepAlive(cwt);
+                GC.KeepAlive(key);
             }
         }
     }
@@ -181,6 +186,9 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     private readonly Lock _locker = new();
 #else
     private readonly object _locker = new();
+#if NETSTANDARD && !NETSTANDARD2_1_OR_GREATER
+    private readonly WeakReference<object> _weakLocker;
+#endif
 #endif
 
     // This allows us to track whether an item was added before or after an enumeration:
@@ -198,18 +206,67 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
             _isPseudoNode = true,
         };
 #if NETSTANDARD && !NETSTANDARD2_1_OR_GREATER
+        _cwtWeakRef = new(_cwt);
+        _weakLocker = new(_locker);
         _createValueCallback = (x) =>
         {
-            CwtEntry entry = new(_cwt, _locker);
+            CwtEntry entry = new(_cwt, _weakLocker);
             entry.Key = new WeakReference<T>(x);
             entry.KeyNode = _cwtKeys.AddLast(new WeakReference<CwtEntry>(entry));
             return entry;
         };
-        _cwtWeakRef = new(_cwt);
+#elif NET
+        _internalNodes = new([], new());
+        _cleanupHelper = new(new(_internalNodes));
 #endif
     }
 
-    internal sealed class InternalNode
+    // NOTE!!! For correctness, it's crucial that no finalizer accesses any managed values except through weak references, as otherwise they may be partially
+    // null-ed out already by the time the finalizer runs, leading to bugs - therefore, we carefully ensure we do all of that through weak references, while
+    // still ensuring that the finalizers can run & collect everything.
+    // We use this side-data structure on .NET (not standard) to allow us to still clean up nodes when the collection is collected.
+    // The way it works is that the collection hold a strong ref to the list, and so does the internal node, but the helper only holds it as weak. That way,
+    // while the collection is alive, it can modify the list, but once it's collected, the helper can find any InternalNodes that are still alive (if any),
+    // since they hold also hold a strong ref to the list; but it does not need to hold a strong reference to the linked list, which would be problematic.
+#if NET
+    private readonly InternalNodeTrackingInfo _internalNodes;
+    private readonly CleanupHelper _cleanupHelper;
+
+    internal sealed class InternalNodeTrackingInfo(LinkedList<WeakReference<InternalNode>> list,
+#if NET9_0_OR_GREATER
+        Lock locker)
+#else
+        object locker)
+#endif
+    {
+        public LinkedList<WeakReference<InternalNode>> List = list;
+#if NET9_0_OR_GREATER
+        public Lock Locker = locker;
+#else
+        public object Locker = locker;
+#endif
+    }
+
+    private sealed class CleanupHelper(WeakReference<InternalNodeTrackingInfo> listRef)
+    {
+        public WeakReference<InternalNodeTrackingInfo> ListRef = listRef;
+
+        ~CleanupHelper()
+        {
+            if (ListRef.TryGetTarget(out var list))
+            {
+                lock (list.Locker)
+                {
+                    foreach (var handle in list.List) TryGetValue(handle)?.EarlyDispose();
+                }
+
+                GC.KeepAlive(list);
+            }
+        }
+    }
+#endif
+
+    internal sealed partial class InternalNode
     {
         // Note: we cannot store the list as a strong reference in this type with the current implementation - the Node stores such a reference.
         // Our reference to the list - note, it's important that this is a weak reference as we directly reference it from InternalNode, then we will leak the
@@ -220,7 +277,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
 #if NETSTANDARD
         // No DependentHandle type on this framework, so we just use a normal WeakReference in here & use a CWT as backing store, and keep track of the node
         // that keeps this instance alive so that we can remove it if we dispose.
-        public LinkedListNode<InternalNode>? _cwtNode;
+        public WeakReference<LinkedListNode<InternalNode>>? _cwtNode;
 #if !NETSTANDARD2_1_OR_GREATER
         public WeakReference<CwtEntry>? _cwtEntry;
 
@@ -243,6 +300,27 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         // Note: we use this to avoid trying to wait a long time in the finalizer for the lock if it has contention - it is not required for correctness.
         // Note: we set this to -1 when it's been removed.
         public int _finalizeAttemptCount;
+
+        // On .NET we want to keep the InternalNodeTrackingInfo alive if this is alive due to the dependent handle:
+        // But, we cannot access via that, so we also store a weak ref to the node we want to remove here & only use that in the finalizer.
+#if NET
+        public WeakHandle _finalizeHelperNode; // Type of value is LinkedListNode<WeakReference<InternalNode>>.
+        public InternalNodeTrackingInfo? _trackingInfo;
+#endif
+
+        partial void RemoveFinalizeHelper();
+#if NET
+        partial void RemoveFinalizeHelper()
+        {
+            if (_finalizeHelperNode.TryGetTarget<LinkedListNode<WeakReference<InternalNode>>>() is { } finalizeHelperNode)
+            {
+                finalizeHelperNode.List?.Remove(finalizeHelperNode);
+                GC.KeepAlive(finalizeHelperNode);
+            }
+
+            _finalizeHelperNode.Dispose();
+        }
+#endif
 
         private bool RemoveFromList(Node impl, WeakHandle original, bool disposing)
         {
@@ -267,6 +345,9 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
                         // Ensure node lives to at least here:
                         GC.KeepAlive(impl);
 
+                        // Dispose the finalizer helper node, if it's still alive:
+                        RemoveFinalizeHelper();
+
                         // It is important that we try to dispose the value or dependent handle while we hold the lock, so do that here:
 #if NET
                         _dependentHandle.Dispose();
@@ -275,7 +356,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
 
                         // Ensure removed from CWT tracking stuff (the remove logic might have missed it, since we're not necessarily alive anymore, so it
                         // might not be able to look up these lists):
-                        _cwtNode?.List?.Remove(_cwtNode);
+                        if (Helpers.TryGetValue(_cwtNode) is { } cwtNode) cwtNode.List?.Remove(cwtNode);
 #if !NETSTANDARD2_1_OR_GREATER
                         if (Helpers.TryGetValue(_cwtEntry) is { } cwtEntry && cwtEntry.Entries.Count == 0)
                         {
@@ -305,6 +386,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
 #else
                 _value.Dispose();
 #endif
+                RemoveFinalizeHelper();
             }
 
             // Success:
@@ -335,14 +417,16 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
                     return false;
                 }
 
-#if NETSTANDARD
                 // Set fields to null:
                 if (!disposing) return true;
+#if NETSTANDARD
                 _cwtNode = null;
 #if !NETSTANDARD2_1_OR_GREATER
                 _cwtEntry = null;
                 _cwt = null;
 #endif
+#else
+                _trackingInfo = null;
 #endif
             }
             finally
@@ -350,13 +434,18 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
                 if (releaseHandle)
                 {
 #if NET
-                    Debug.Assert(!(hasImplValue && _dependentHandle.IsAllocated), "These values should already have been disposed in RemoveFromList.");
+                    Debug.Assert(
+                        !(hasImplValue && (_dependentHandle.IsAllocated || _finalizeHelperNode.Handle != IntPtr.Zero)),
+                        "These values should already have been disposed in RemoveFromList.");
                     _dependentHandle.Dispose();
 #else
-                    Debug.Assert(!(hasImplValue && _value.Handle != IntPtr.Zero), "These values should already have been disposed in RemoveFromList.");
+                    Debug.Assert(
+                        !(hasImplValue && _value.Handle != IntPtr.Zero),
+                        "These values should already have been disposed in RemoveFromList.");
                     _value.Dispose();
 #endif
                     impl.Dispose();
+                    RemoveFinalizeHelper();
                 }
             }
 
@@ -388,6 +477,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
                 _finalizeAttemptCount = -1;
 #if NET
                 _dependentHandle.Dispose();
+                _finalizeHelperNode.Dispose();
 #else
                 _value.Dispose();
 #endif
@@ -570,21 +660,24 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         DebugAssertNotDisposed();
         Node node = new(this);
         InternalNode internalNode = new();
-        node._node = new WeakReference<InternalNode>(internalNode);
+        node._node = new(internalNode);
         internalNode._impl = WeakHandle.Alloc(node);
 #if NETSTANDARD
         internalNode._value = WeakHandle.Alloc(value);
 #if NETSTANDARD2_1_OR_GREATER
-        internalNode._cwtNode = _cwt.GetValue(value, static (_) => []).AddLast(internalNode);
+        internalNode._cwtNode = new(_cwt.GetValue(value, static (_) => []).AddLast(internalNode));
 #else
         var cwtEntry = _cwt.GetValue(value, _createValueCallback);
-        internalNode._cwtEntry = new WeakReference<CwtEntry>(cwtEntry);
-        internalNode._cwtNode = cwtEntry.Entries.AddLast(internalNode);
+        internalNode._cwtEntry = new(cwtEntry);
+        internalNode._cwtNode = new(cwtEntry.Entries.AddLast(internalNode));
         internalNode._cwt = _cwtWeakRef;
 #endif
 #else
         internalNode._dependentHandle = new DependentHandle(value, internalNode);
+        internalNode._finalizeHelperNode = WeakHandle.Alloc(_internalNodes.List.AddLast(node._node));
+        internalNode._trackingInfo = _internalNodes;
 #endif
+        GC.KeepAlive(internalNode);
 
         // Note: our memory barrier to ensure the write is visible before the lock exits is in the caller (ManualAdd).
         _version++;
@@ -902,6 +995,11 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
 #endif
         GC.KeepAlive(_cwt); // Ensure the CWT lives to here at least.
         _cwt = null;
+#else
+        _internalNodes.List.Clear();
+        GC.SuppressFinalize(_cleanupHelper);
+        GC.KeepAlive(_cleanupHelper);
+        GC.KeepAlive(_internalNodes);
 #endif
 
         // Forget all nodes:
@@ -929,45 +1027,6 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         GC.KeepAlive(this); // Ensure that if we call this method, nothing tries to run the finalizer after we've cleaned up
 #endif
     }
-
-#if NET
-    /// <summary>
-    /// Finalizes an instance of the <see cref="ConcurrentWeakList{T}"/> class.
-    /// </summary>
-    ~ConcurrentWeakList()
-    {
-        // Take the lock:
-        using var scope = EnterLock(out bool wasDisposed);
-        if (wasDisposed) return;
-        DebugAssertNotDisposed();
-        HandleNode(_root, 0);
-        _root = null;
-
-        // We loop through the whole list at once & free the DependentHandles rather than doing it part-by-part - this can block the finalizer thread for a
-        // significant amount of time if the list is large.
-        // If this causes issues for the caller, they should have properly disposed the list instead of letting the finalizer run.
-        void HandleNode(Node n, int depth)
-        {
-            // Check if is removed node:
-            if (depth > 512) ThrowUnreachableExceptionForOverIterated();
-            if (n._color == Node.Color.Removed) return;
-
-            // Handle internal node disposal:
-            if (n.GetInternalNode() is { } node) node.EarlyDispose();
-
-            // Recurse:
-            if (n._left is not null) HandleNode(n._left, depth + 1);
-            if (n._right is not null) HandleNode(n._right, depth + 1);
-
-            // Clear references:
-            n._color = Node.Color.Removed;
-            n._left = null;
-            n._right = null;
-            n._parent = null;
-            n._node = null;
-        }
-    }
-#endif
 
     // The caller must hold the lock for the list when calling this and have already checked for disposal.
     // Note: the caller must guarantee that value is not null.
