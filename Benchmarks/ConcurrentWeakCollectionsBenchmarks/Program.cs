@@ -349,5 +349,27 @@ public class Benchs
 
         GC.KeepAlive(value);
     }
+
+    [Benchmark]
+    public void CreateAddSelfGCAutoClean()
+    {
+        ConcurrentWeakList<object> list = new();
+
+        int n = N;
+        var nodes = _nodes;
+        object[] values = _values;
+        if (n > 0)
+        {
+            _ = nodes[n - 1];
+            _ = values[n - 1];
+        }
+
+        for (int i = 0; i < n; i++)
+        {
+            nodes[i] = list.AddLast(values[i] = new object());
+        }
+
+        GC.KeepAlive(values);
+    }
 #endif
 }
