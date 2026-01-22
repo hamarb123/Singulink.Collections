@@ -7,14 +7,14 @@ namespace Singulink.Collections;
 #pragma warning disable SA1132 // Do not combine fields
 #pragma warning disable SA1401 // Fields should be private
 
-// Similar to WeakReference<T>, but automatically pools a small amount & avoids allocating a wrapper class, since the containing class disposes it, allows
+// Similar to T, but automatically pools a small amount & avoids allocating a wrapper class, since the containing class disposes it, allows
 // using interlocked operations, and doesn't let GC see it directly (useful for values in finalizers).
-internal struct WeakHandle(IntPtr handle)
+internal struct StrongHandle(IntPtr handle)
 {
     public IntPtr Handle = handle; // Actual handle value to support interlocked operations.
 
 #if NET10_0_OR_GREATER
-    private readonly WeakGCHandle<object?> AsGCHandle() => WeakGCHandle<object?>.FromIntPtr(Handle);
+    private readonly GCHandle<object?> AsGCHandle() => GCHandle<object?>.FromIntPtr(Handle);
 #else
     private readonly GCHandle AsGCHandle()
     {
@@ -37,7 +37,8 @@ internal struct WeakHandle(IntPtr handle)
     public readonly void SetTarget(object? target)
     {
 #if NET10_0_OR_GREATER
-        AsGCHandle().SetTarget(target);
+        var handle = AsGCHandle();
+        handle.Target = target;
 #else
         var handle = AsGCHandle();
         handle.Target = target;
@@ -45,30 +46,34 @@ internal struct WeakHandle(IntPtr handle)
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public readonly T? TryGetTarget<T>() where T : class?
+    public readonly T? GetTarget<T>() where T : class?
     {
         var handle = AsGCHandle();
         if (!handle.IsAllocated) return null;
-        object? result;
-#if NET10_0_OR_GREATER
-        if (!handle.TryGetTarget(out result)) result = null;
-#else
-        result = handle.Target;
-#endif
+        object? result = handle.Target;
         Debug.Assert(result is T or null, "Stored target should be of the correct type or null.");
         return Unsafe.As<T?>(result);
     }
 
+    // This is a seperate method as it can fail with non-null T if the handle is not allocated.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static WeakHandle Alloc(object? target)
+    public readonly T GetNotNullTarget<T>() where T : class
+    {
+        var result = GetTarget<T>();
+        Debug.Assert(result is not null, "Expected non-null target.");
+        return result!;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static StrongHandle Alloc(object? target)
     {
         // Try to get from per-thread cache:
         var perThreadCache = _perThreadCache;
         if (perThreadCache is not null && (uint)perThreadCache.Count > 0)
         {
-            Debug.Assert(perThreadCache.Count > 0 && perThreadCache.Count <= PerThreadWeakHandleHolder.NumHandles, "Index should be in range.");
+            Debug.Assert(perThreadCache.Count > 0 && perThreadCache.Count <= PerThreadStrongHandleHolder.NumHandles, "Index should be in range.");
             ref IntPtr handleRef = ref Unsafe.Add(ref perThreadCache.Handle0, (IntPtr)(nint)(nuint)(uint)--perThreadCache.Count);
-            var handle = new WeakHandle(handleRef);
+            var handle = new StrongHandle(handleRef);
             handleRef = IntPtr.Zero;
             handle.SetTarget(target);
             GC.KeepAlive(perThreadCache);
@@ -78,26 +83,26 @@ internal struct WeakHandle(IntPtr handle)
         // Try to get from the shared cache:
         return Fallback(target);
         [MethodImpl(MethodImplOptions.NoInlining)]
-        static WeakHandle Fallback(object? target)
+        static StrongHandle Fallback(object? target)
         {
             IntPtr handleValue;
             var shared = _sharedCache;
 #if NET7_0_OR_GREATER
-            ReadOnlySpan<IntPtr> values = MemoryMarshal.CreateReadOnlySpan(ref shared.Handle0, SharedWeakHandleHolder.NumHandles);
+            ReadOnlySpan<IntPtr> values = MemoryMarshal.CreateReadOnlySpan(ref shared.Handle0, SharedStrongHandleHolder.NumHandles);
             int potentialIndex = values.IndexOfAnyExcept(IntPtr.Zero);
             if (potentialIndex >= 0)
             {
-                Debug.Assert(potentialIndex < SharedWeakHandleHolder.NumHandles, "Index should be in range.");
+                Debug.Assert(potentialIndex < SharedStrongHandleHolder.NumHandles, "Index should be in range.");
                 ref IntPtr handleRef = ref Unsafe.Add(ref shared.Handle0, (uint)potentialIndex);
 #else
-            for (int i = 0; i < SharedWeakHandleHolder.NumHandles; i++)
+            for (int i = 0; i < SharedStrongHandleHolder.NumHandles; i++)
             {
                 ref IntPtr handleRef = ref Unsafe.Add(ref shared.Handle0, i);
 #endif
                 handleValue = Interlocked.Exchange(ref handleRef, IntPtr.Zero);
                 if (handleValue != IntPtr.Zero)
                 {
-                    var handle = new WeakHandle(handleValue);
+                    var handle = new StrongHandle(handleValue);
                     handle.SetTarget(target);
                     GC.KeepAlive(shared);
                     return handle;
@@ -106,11 +111,11 @@ internal struct WeakHandle(IntPtr handle)
 
             // Otherwise, just make a new one:
 #if NET10_0_OR_GREATER
-            handleValue = WeakGCHandle<object?>.ToIntPtr(new WeakGCHandle<object?>(target));
+            handleValue = GCHandle<object?>.ToIntPtr(new GCHandle<object?>(target));
 #else
-            handleValue = GCHandle.ToIntPtr(GCHandle.Alloc(target, GCHandleType.Weak));
+            handleValue = GCHandle.ToIntPtr(GCHandle.Alloc(target, GCHandleType.Normal));
 #endif
-            return new WeakHandle(handleValue);
+            return new StrongHandle(handleValue);
         }
     }
 
@@ -126,13 +131,13 @@ internal struct WeakHandle(IntPtr handle)
             var perThreadCache = _perThreadCache;
             if (perThreadCache is null)
             {
-                perThreadCache = new PerThreadWeakHandleHolder();
+                perThreadCache = new PerThreadStrongHandleHolder();
                 _perThreadCache = perThreadCache;
             }
 
-            if ((uint)perThreadCache.Count < PerThreadWeakHandleHolder.NumHandles)
+            if ((uint)perThreadCache.Count < PerThreadStrongHandleHolder.NumHandles)
             {
-                Debug.Assert(perThreadCache.Count < PerThreadWeakHandleHolder.NumHandles, "Index should be in range.");
+                Debug.Assert(perThreadCache.Count < PerThreadStrongHandleHolder.NumHandles, "Index should be in range.");
                 ref IntPtr handleRef = ref Unsafe.Add(ref perThreadCache.Handle0, (IntPtr)(nint)(nuint)(uint)perThreadCache.Count++);
                 SetTarget(null);
                 handleRef = Handle;
@@ -143,21 +148,21 @@ internal struct WeakHandle(IntPtr handle)
             // Try to return to the shared cache:
             Fallback(this);
             [MethodImpl(MethodImplOptions.NoInlining)]
-            static void Fallback(WeakHandle handle)
+            static void Fallback(StrongHandle handle)
             {
                 IntPtr handleValue = handle.Handle;
                 var shared = _sharedCache;
 #if NET
-                Span<IntPtr> values = MemoryMarshal.CreateSpan(ref shared.Handle0, SharedWeakHandleHolder.NumHandles);
+                Span<IntPtr> values = MemoryMarshal.CreateSpan(ref shared.Handle0, SharedStrongHandleHolder.NumHandles);
                 int potentialIndex = values.IndexOf(IntPtr.Zero);
                 if (potentialIndex >= 0)
                 {
                     handle.SetTarget(null);
-                    Debug.Assert(potentialIndex < SharedWeakHandleHolder.NumHandles, "Index should be in range.");
+                    Debug.Assert(potentialIndex < SharedStrongHandleHolder.NumHandles, "Index should be in range.");
                     ref IntPtr handleRef = ref Unsafe.Add(ref shared.Handle0, (uint)potentialIndex);
 #else
                 handle.SetTarget(null);
-                for (int i = 0; i < SharedWeakHandleHolder.NumHandles; i++)
+                for (int i = 0; i < SharedStrongHandleHolder.NumHandles; i++)
                 {
                     ref IntPtr handleRef = ref Unsafe.Add(ref shared.Handle0, i);
 #endif
@@ -179,45 +184,45 @@ internal struct WeakHandle(IntPtr handle)
         this = default;
     }
 
-    private static readonly SharedWeakHandleHolder _sharedCache = new();
+    private static readonly SharedStrongHandleHolder _sharedCache = new();
 
     [ThreadStatic]
-    private static PerThreadWeakHandleHolder? _perThreadCache;
+    private static PerThreadStrongHandleHolder? _perThreadCache;
 
     [StructLayout(LayoutKind.Sequential)]
-    private sealed class PerThreadWeakHandleHolder
+    private sealed class PerThreadStrongHandleHolder
     {
         public const int NumHandles = 4;
         public IntPtr Handle0, Handle1, Handle2, Handle3;
         public int Count;
 
         // Finalizer to clean up when thread exits:
-        ~PerThreadWeakHandleHolder()
+        ~PerThreadStrongHandleHolder()
         {
             for (int i = 0; i < Count; i++)
             {
                 IntPtr handleValue = Unsafe.Add(ref Handle0, i);
-                var handle = new WeakHandle(handleValue);
+                var handle = new StrongHandle(handleValue);
                 handle.DisposeReal();
             }
         }
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private sealed class SharedWeakHandleHolder
+    private sealed class SharedStrongHandleHolder
     {
         public const int NumHandles = 8;
         public IntPtr Handle0, Handle1, Handle2, Handle3, Handle4, Handle5, Handle6, Handle7;
 
         // Finalizer to clean up when process exits or if we get unloaded:
-        ~SharedWeakHandleHolder()
+        ~SharedStrongHandleHolder()
         {
             for (int i = 0; i < NumHandles; i++)
             {
                 IntPtr handleValue = Unsafe.Add(ref Handle0, i);
                 if (handleValue != IntPtr.Zero)
                 {
-                    var handle = new WeakHandle(handleValue);
+                    var handle = new StrongHandle(handleValue);
                     handle.DisposeReal();
                 }
             }
