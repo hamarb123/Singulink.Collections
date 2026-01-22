@@ -103,49 +103,20 @@ file static class Helpers
 /// <para>For optimal performance, avoid letting the finalizer run; instead, dispose the list explicitly or clear it - otherwise, the finalizer thread may be
 /// blocked for a significant amount of time if the list is large.</para>
 /// <para>Note: this type is not safe to resurrect, or use in a partially finalized state.</para>
+/// <para>Note: on .NET Standard, all associated memory may not immediately (or promptly) removed when a value is removed from the list, this is due to
+/// <see cref="ConditionalWeakTable{TKey, TValue}.Remove(TKey)" /> taking O(n) time, and thus scaling terribly in the common case of the value dying quickly
+/// afterwards, and being problematic for how long our internal lock would need to be held, so don't expect all helper memory to be freed until the value is
+/// collected by the garbage collector (it may still be around after <see cref="Clear" /> even). This means that potentially O(1) memory may be around
+/// indefinitely for each value added, until the value or this list is collected by the garbage collector, or <see cref="Dispose" /> is called. This does not
+/// apply to .NET 6+, as it has DependentHandle available, which does not have this issue.</para>
 /// </remarks>
 public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable where T : class
 {
 #if NETSTANDARD
     // No DependentHandle type on .NET Standard, so we store the values in a CWT instead:
-#if NETSTANDARD2_1_OR_GREATER
-    private ConditionalWeakTable<T, LinkedList<InternalNode>>? _cwt = [];
-#else
-    // .NET Standard 2.0 doesn't have CWT.Clear, so we try to keep track of the keys so that we can clean it up ourselves:
-    private ConditionalWeakTable<T, CwtEntry>? _cwt = new();
-    private WeakReference<ConditionalWeakTable<T, CwtEntry>>? _cwtWeakRef;
-    private LinkedList<WeakReference<CwtEntry>>? _cwtKeys = new();
-    private ConditionalWeakTable<T, CwtEntry>.CreateValueCallback _createValueCallback;
-    internal sealed class CwtEntry(ConditionalWeakTable<T, CwtEntry> cwt, WeakReference<object> locker)
-    {
-        public WeakReference<T> Key;
-        public LinkedListNode<WeakReference<CwtEntry>>? KeyNode;
-        public LinkedList<InternalNode>? Entries = [];
-        public WeakReference<ConditionalWeakTable<T, CwtEntry>> Cwt = new(cwt);
-        public WeakReference<object> Locker = locker;
-
-        ~CwtEntry()
-        {
-            if (Locker.TryGetTarget(out var locker) && Cwt.TryGetTarget(out var cwt) && Key.TryGetTarget(out var key))
-            {
-                lock (locker)
-                {
-                    if (cwt.TryGetValue(key, out var otherEntry))
-                    {
-                        if (otherEntry == this)
-                        {
-                            cwt.Remove(key);
-                        }
-                    }
-                }
-
-                GC.KeepAlive(locker);
-                GC.KeepAlive(cwt);
-                GC.KeepAlive(key);
-            }
-        }
-    }
-#endif
+    // IMPORTANT: InternalNode must not hold a strong reference to the CWT or ConcurrentWeakList, otherwise it will leak
+    // due to https://github.com/dotnet/runtime/issues/12255.
+    private ConditionalWeakTable<T, LinkedList<InternalNode>>? _cwt = new();
 #endif
 
     // The root node of the red-black tree:
@@ -162,10 +133,6 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     [MemberNotNull(nameof(_root))]
 #if NETSTANDARD
     [MemberNotNull(nameof(_cwt))]
-#if !NETSTANDARD2_1_OR_GREATER
-    [MemberNotNull(nameof(_cwtWeakRef))]
-    [MemberNotNull(nameof(_cwtKeys))]
-#endif
 #endif
     partial void DebugAssertNotDisposed();
 #if DEBUG
@@ -174,10 +141,6 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         Debug.Assert(_root is not null, "Object is disposed.");
 #if NETSTANDARD
         Debug.Assert(_cwt is not null, "_cwt should not be null since not disposed.");
-#if !NETSTANDARD2_1_OR_GREATER
-        Debug.Assert(_cwtWeakRef is not null, "_cwtWeakRef should not be null since not disposed.");
-        Debug.Assert(_cwtKeys is not null, "_cwtKeys should not be null since not disposed.");
-#endif
 #endif
     }
 #endif
@@ -186,9 +149,6 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
     private readonly Lock _locker = new();
 #else
     private readonly object _locker = new();
-#if NETSTANDARD && !NETSTANDARD2_1_OR_GREATER
-    private readonly WeakReference<object> _weakLocker;
-#endif
 #endif
 
     // This allows us to track whether an item was added before or after an enumeration:
@@ -205,17 +165,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
             _subtreeSize = 1,
             _isPseudoNode = true,
         };
-#if NETSTANDARD && !NETSTANDARD2_1_OR_GREATER
-        _cwtWeakRef = new(_cwt);
-        _weakLocker = new(_locker);
-        _createValueCallback = (x) =>
-        {
-            CwtEntry entry = new(_cwt, _weakLocker);
-            entry.Key = new WeakReference<T>(x);
-            entry.KeyNode = _cwtKeys.AddLast(new WeakReference<CwtEntry>(entry));
-            return entry;
-        };
-#elif NET
+#if NET
         _internalNodes = new([], new());
         _cleanupHelper = new(new(_internalNodes));
 #endif
@@ -278,12 +228,6 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         // No DependentHandle type on this framework, so we just use a normal WeakReference in here & use a CWT as backing store, and keep track of the node
         // that keeps this instance alive so that we can remove it if we dispose.
         public WeakReference<LinkedListNode<InternalNode>>? _cwtNode;
-#if !NETSTANDARD2_1_OR_GREATER
-        public WeakReference<CwtEntry>? _cwtEntry;
-
-        // Note: we must store CWT as a weak reference to avoid accessing it after its finalizer.
-        public WeakReference<ConditionalWeakTable<T, CwtEntry>>? _cwt;
-#endif
 #else
         // We use DependentHandle to keep this Node alive at least as long as the value.
         public DependentHandle _dependentHandle;
@@ -357,14 +301,6 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
                         // Ensure removed from CWT tracking stuff (the remove logic might have missed it, since we're not necessarily alive anymore, so it
                         // might not be able to look up these lists):
                         if (Helpers.TryGetValue(_cwtNode) is { } cwtNode) cwtNode.List?.Remove(cwtNode);
-#if !NETSTANDARD2_1_OR_GREATER
-                        if (Helpers.TryGetValue(_cwtEntry) is { } cwtEntry && cwtEntry.Entries.Count == 0)
-                        {
-                            if (_cwt.TryGetTarget(out var cwt) && cwtEntry.Key.TryGetTarget(out var key)) cwt.Remove(key);
-                            cwtEntry.KeyNode?.List?.Remove(cwtEntry.KeyNode);
-                            GC.SuppressFinalize(cwtEntry);
-                        }
-#endif
 #endif
                     }
                 }
@@ -421,10 +357,6 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
                 if (!disposing) return true;
 #if NETSTANDARD
                 _cwtNode = null;
-#if !NETSTANDARD2_1_OR_GREATER
-                _cwtEntry = null;
-                _cwt = null;
-#endif
 #else
                 _trackingInfo = null;
 #endif
@@ -664,14 +596,7 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
         internalNode._impl = WeakHandle.Alloc(node);
 #if NETSTANDARD
         internalNode._value = WeakHandle.Alloc(value);
-#if NETSTANDARD2_1_OR_GREATER
         internalNode._cwtNode = new(_cwt.GetValue(value, static (_) => []).AddLast(internalNode));
-#else
-        var cwtEntry = _cwt.GetValue(value, _createValueCallback);
-        internalNode._cwtEntry = new(cwtEntry);
-        internalNode._cwtNode = new(cwtEntry.Entries.AddLast(internalNode));
-        internalNode._cwt = _cwtWeakRef;
-#endif
 #else
         internalNode._dependentHandle = new DependentHandle(value, internalNode);
         internalNode._finalizeHelperNode = WeakHandle.Alloc(_internalNodes.List.AddLast(node._node));
@@ -983,15 +908,9 @@ public sealed partial class ConcurrentWeakList<T> : IEnumerable<T>, IDisposable 
 
         // Clean out resources:
 #if NETSTANDARD
+        // Note: on .NET Standard 2.0, there's no CWT.Clear(), so we just null it out and let the GC clean it up.
 #if NETSTANDARD2_1_OR_GREATER
         _cwt.Clear();
-#else
-        var cwtKeysCopy = _cwtKeys;
-        _cwtKeys = null;
-        foreach (var keyRef in cwtKeysCopy)
-        {
-            if (keyRef.TryGetTarget(out var key) && key.Key.TryGetTarget(out var target)) _cwt.Remove(target);
-        }
 #endif
         GC.KeepAlive(_cwt); // Ensure the CWT lives to here at least.
         _cwt = null;
