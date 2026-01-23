@@ -1,3 +1,4 @@
+#if NET9_0_OR_GREATER
 namespace Singulink.Collections.Weak.ConcurrentTests.ConcurrentWeakListTests;
 
 [PrefixTestClass]
@@ -186,3 +187,4 @@ public class TryUpdateTargetTests
         GC.KeepAlive(newValue);
     }
 }
+#endif

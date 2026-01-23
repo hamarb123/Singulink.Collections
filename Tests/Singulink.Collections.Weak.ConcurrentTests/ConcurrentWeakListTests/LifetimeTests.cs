@@ -29,20 +29,20 @@ public class LifetimeTests
     {
         ConcurrentWeakList<object> list = new();
 
-        var (valueRef, node, internalNodeWeakRef) = Helpers.NotInlined(list, (list) =>
+        var (valueRef, node, internalNodeHelperWeakRef) = Helpers.NotInlined(list, (list) =>
         {
             object value = new();
             var node = list.AddLast(value);
-            var internalNodeWeakRef = new WeakReference<object?>(Helpers.GetInternalNode(node));
+            var internalNodeHelperWeakRef = new WeakReference<object?>(Helpers.GetInternalNodeFinalizeHelper(node));
             GC.KeepAlive(value);
-            return (new WeakReference<object>(value), node, internalNodeWeakRef);
+            return (new WeakReference<object>(value), node, internalNodeHelperWeakRef);
         });
 
         Helpers.ForceGC();
 
         valueRef.TryGetTarget(out _).ShouldBeFalse();
         node.IsRemoved.ShouldBeTrue();
-        internalNodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
+        internalNodeHelperWeakRef.TryGetTarget(out _).ShouldBeFalse();
 
         GC.KeepAlive(list);
     }
@@ -52,20 +52,20 @@ public class LifetimeTests
     {
         ConcurrentWeakList<object> list = new();
 
-        var (node, valueRef, internalNodeWeakRef) = Helpers.NotInlined(list, (list) =>
+        var (node, valueRef, internalNodeHelperWeakRef) = Helpers.NotInlined(list, (list) =>
         {
             object value = new();
             var node = list.AddLast(value);
-            var internalNodeWeakRef = new WeakReference<object?>(Helpers.GetInternalNode(node));
+            var internalNodeHelperWeakRef = new WeakReference<object?>(Helpers.GetInternalNodeFinalizeHelper(node));
             GC.KeepAlive(value);
-            return (node, new WeakReference<object>(value), internalNodeWeakRef);
+            return (node, new WeakReference<object>(value), internalNodeHelperWeakRef);
         });
 
         Helpers.ForceGC();
 
         node.IsRemoved.ShouldBeTrue();
         valueRef.TryGetTarget(out _).ShouldBeFalse();
-        internalNodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
+        internalNodeHelperWeakRef.TryGetTarget(out _).ShouldBeFalse();
 
         GC.KeepAlive(node);
         GC.KeepAlive(list);
@@ -74,7 +74,7 @@ public class LifetimeTests
     [TestMethod]
     public void ValueReferencingListDoesNotLeak()
     {
-        var (listWeakRef, nodeWeakRef, internalNodeWeakRef) = Helpers.NotInlined(() =>
+        var (listWeakRef, nodeWeakRef, internalNodeWeakRef, internalNodeHelperWeakRef) = Helpers.NotInlined(() =>
         {
             var list = new ConcurrentWeakList<object>();
             List<object> value = [list]; // Add as many things as possible to try to force a leak if there is one:
@@ -82,8 +82,9 @@ public class LifetimeTests
             value.Add(node);
             value.Add(value);
             var internalNodeWeakRef = new WeakReference<object?>(Helpers.GetInternalNode(node));
+            var internalNodeHelperWeakRef = new WeakReference<object?>(Helpers.GetInternalNodeFinalizeHelper(node));
             GC.KeepAlive(value);
-            return (new WeakReference<object>(list), new WeakReference<object?>(node), internalNodeWeakRef);
+            return (new WeakReference<object>(list), new WeakReference<object?>(node), internalNodeWeakRef, internalNodeHelperWeakRef);
         });
 
         Helpers.ForceGC();
@@ -91,20 +92,22 @@ public class LifetimeTests
         listWeakRef.TryGetTarget(out _).ShouldBeFalse();
         nodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
         internalNodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
+        internalNodeHelperWeakRef.TryGetTarget(out _).ShouldBeFalse();
     }
 
     [TestMethod]
     public void AliveValueInListDoesNotLeakUnreferencedList()
     {
-        var (listWeakRef, nodeWeakRef, internalNodeWeakRef, o) = Helpers.NotInlined(() =>
+        var (listWeakRef, nodeWeakRef, internalNodeWeakRef, internalNodeHelperWeakRef, o) = Helpers.NotInlined(() =>
         {
             var list = new ConcurrentWeakList<object>();
             object value = new();
             var node = list.AddLast(value);
             var internalNodeWeakRef = new WeakReference<object?>(Helpers.GetInternalNode(node));
+            var internalNodeHelperWeakRef = new WeakReference<object?>(Helpers.GetInternalNodeFinalizeHelper(node));
             list.Clear();
             GC.KeepAlive(value);
-            return (new WeakReference<object>(list), new WeakReference<object?>(node), internalNodeWeakRef, value);
+            return (new WeakReference<object>(list), new WeakReference<object?>(node), internalNodeWeakRef, internalNodeHelperWeakRef, value);
         });
 
         Helpers.ForceGC();
@@ -112,6 +115,7 @@ public class LifetimeTests
         listWeakRef.TryGetTarget(out _).ShouldBeFalse();
         nodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
         internalNodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
+        internalNodeHelperWeakRef.TryGetTarget(out _).ShouldBeFalse();
 
         GC.KeepAlive(o);
     }
@@ -119,15 +123,16 @@ public class LifetimeTests
     [TestMethod]
     public void AliveValueInClearedListDoesNotLeakUnreferencedList()
     {
-        var (listWeakRef, nodeWeakRef, internalNodeWeakRef, o) = Helpers.NotInlined(() =>
+        var (listWeakRef, nodeWeakRef, internalNodeWeakRef, internalNodeHelperWeakRef, o) = Helpers.NotInlined(() =>
         {
             var list = new ConcurrentWeakList<object>();
             object value = new();
             var node = list.AddLast(value);
             var internalNodeWeakRef = new WeakReference<object?>(Helpers.GetInternalNode(node));
+            var internalNodeHelperWeakRef = new WeakReference<object?>(Helpers.GetInternalNodeFinalizeHelper(node));
             list.Clear();
             GC.KeepAlive(value);
-            return (new WeakReference<object>(list), new WeakReference<object?>(node), internalNodeWeakRef, value);
+            return (new WeakReference<object>(list), new WeakReference<object?>(node), internalNodeWeakRef, internalNodeHelperWeakRef, value);
         });
 
         Helpers.ForceGC();
@@ -135,6 +140,7 @@ public class LifetimeTests
         listWeakRef.TryGetTarget(out _).ShouldBeFalse();
         nodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
         internalNodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
+        internalNodeHelperWeakRef.TryGetTarget(out _).ShouldBeFalse();
 
         GC.KeepAlive(o);
     }
@@ -142,15 +148,16 @@ public class LifetimeTests
     [TestMethod]
     public void AliveValueInDisposedListDoesNotLeakUnreferencedList()
     {
-        var (listWeakRef, nodeWeakRef, internalNodeWeakRef, o) = Helpers.NotInlined(() =>
+        var (listWeakRef, nodeWeakRef, internalNodeWeakRef, internalNodeHelperWeakRef, o) = Helpers.NotInlined(() =>
         {
             var list = new ConcurrentWeakList<object>();
             object value = new();
             var node = list.AddLast(value);
             var internalNodeWeakRef = new WeakReference<object?>(Helpers.GetInternalNode(node));
+            var internalNodeHelperWeakRef = new WeakReference<object?>(Helpers.GetInternalNodeFinalizeHelper(node));
             list.Dispose();
             GC.KeepAlive(value);
-            return (new WeakReference<object>(list), new WeakReference<object?>(node), internalNodeWeakRef, value);
+            return (new WeakReference<object>(list), new WeakReference<object?>(node), internalNodeWeakRef, internalNodeHelperWeakRef, value);
         });
 
         Helpers.ForceGC();
@@ -158,6 +165,7 @@ public class LifetimeTests
         listWeakRef.TryGetTarget(out _).ShouldBeFalse();
         nodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
         internalNodeWeakRef.TryGetTarget(out _).ShouldBeFalse();
+        internalNodeHelperWeakRef.TryGetTarget(out _).ShouldBeFalse();
 
         GC.KeepAlive(o);
     }
@@ -248,16 +256,18 @@ public class LifetimeTests
     {
         ConcurrentWeakList<object> list = new();
 
-        var (node1, node1InternalNode, node2, value) = Helpers.NotInlined(list, (list) =>
+        var (node1, node1InternalNode, node1InternalNodeHelper, node2, value) = Helpers.NotInlined(list, (list) =>
         {
             object value = new();
             var node1 = list.AddLast(value);
             var node2 = list.AddLast(value);
             var node1InternalNode = new WeakReference<object?>(Helpers.GetInternalNode(node1));
+            var node1InternalNodeHelper = new WeakReference<object?>(Helpers.GetInternalNodeFinalizeHelper(node1));
             node1.Dispose();
             return (
                 new WeakReference<ConcurrentWeakList<object>.Node>(node1),
                 node1InternalNode,
+                node1InternalNodeHelper,
                 new WeakReference<ConcurrentWeakList<object>.Node>(node2),
                 value);
         });
@@ -266,6 +276,7 @@ public class LifetimeTests
 
         node1.TryGetTarget(out _).ShouldBeFalse();
         node1InternalNode.TryGetTarget(out _).ShouldBeFalse();
+        node1InternalNodeHelper.TryGetTarget(out _).ShouldBeFalse();
         node2.TryGetTarget(out var actualNode).ShouldBeTrue();
         actualNode.IsRemoved.ShouldBeFalse();
 
